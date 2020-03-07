@@ -2,6 +2,7 @@ package it.fb.tcache;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.google.common.base.Preconditions;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterators;
@@ -55,7 +56,7 @@ public class TimestampedCache<K, V, P> {
                     }
                     return ret;
                 }
-                do {
+                while (!curChunk.endOfDataForward && nextTimestamp < endTimestamp) { // TODO: Posso anche terminare a meta' di un chunk
                     curChunk = getFwd(key, nextTimestamp, nextChunkSeq, param);
                     if (curChunk.hasNextChunk()) {
                         nextChunkSeq++;
@@ -71,7 +72,7 @@ public class TimestampedCache<K, V, P> {
                     if (curChunkIterator.hasNext() && timestamper.getTs(curChunkIterator.peek()) < endTimestamp) {
                         return curChunkIterator.next();
                     }
-                } while (!curChunk.endOfDataForward && nextTimestamp < endTimestamp);
+                }
                 return endOfData();
             }
         };
@@ -80,42 +81,41 @@ public class TimestampedCache<K, V, P> {
     private Chunk<V> getFwd(K key, long timestamp, int chunkSeq, P param) {
         Key<K> k = new Key<>(key, timestamp, chunkSeq);
         @Nullable Chunk<V> chunk = cache.getIfPresent(k);
-        if (chunk == null) {
-            List<V> lResult;
-            if (chunkSeq == 0) {
-                Loader.Result<? extends V> result = loader.loadForward(key, timestamp, timestamp + slices[0], 0, chunkSize + 1, param);
-                lResult = ImmutableList.copyOf(result.getData());
-                return arrangeFwd(key, timestamp, -1, lResult);
-            } else {
-                // In sostanza rimetto in una lista tutti i dati dei chunk con stesso timestamp,
-                // aggiungo i dati caricati di recente, e rifaccio l'arrange - quindi la rifaccio
-                // anche per i chunk che ci sono gia'. Nulla di tragico, ma migliorabile.
-                lResult = new ArrayList<>();
-                for (int c = 0; c < chunkSeq; c++) {
-                    lResult.addAll(getFwd(key, timestamp, c, param).data);
-                }
-                appendForward(key, param, lResult);
-                arrangeFwd(key, timestamp, -1, lResult);
-                return cache.getIfPresent(k);
-            }
-        } else if (!chunk.complete) {
-            List<V> lResult = new ArrayList<>(chunk.data);
-            appendForward(key, param, lResult);
-            return arrangeFwd(key, timestamp, chunkSeq, lResult);
-        } else {
+        if (chunk != null && chunk.complete) {
             return chunk;
         }
+        if (chunk != null || chunkSeq > 0) {
+            // In sostanza rimetto in una lista tutti i dati dei chunk con stesso timestamp,
+            // aggiungo i dati caricati di recente, e rifaccio l'arrange - quindi la rifaccio
+            // anche per i chunk che ci sono gia'. Nulla di tragico, ma migliorabile.
+            // Attenzione ai dati con stesso timestamp se lo miglioro
+            List<V> lResult = new ArrayList<>();
+            for (int c = 0; c < chunkSeq; c++) {
+                lResult.addAll(getFwd(key, timestamp, c, param).data);
+            }
+            if (chunk != null) {
+                lResult.addAll(chunk.data);
+            }
+            long resultEndTs = appendForward(key, param, lResult);
+            arrangeFwd(key, timestamp, -1, resultEndTs, ImmutableList.copyOf(lResult));
+            return cache.getIfPresent(k); // TODO: Problematico in concorrenza
+        }
+        Loader.Result<? extends V> result = loader.loadForward(key, timestamp, timestamp + slices[0], 0, chunkSize + 1, param);
+        List<V> lResult = ImmutableList.copyOf(result.getData());
+        long resultEndTs = result.getData().size() == chunkSize + 1 ? timestamper.getTs(lResult.get(lResult.size() - 1)) : timestamp + slices[0];
+        return arrangeFwd(key, timestamp, -1, resultEndTs, lResult);
     }
 
-    private Loader.Result<? extends V> appendForward(K key, P param, List<V> lResult) {
+    private long appendForward(K key, P param, List<V> lResult) {
         if (lResult.isEmpty()) {
             throw new IllegalStateException();
         }
         long lastTs = timestamper.getTs(lResult.get(lResult.size() - 1));
         int lastIdx = binarySearch(lResult, timestamper, lastTs, true);
-        Loader.Result<? extends V> result = loader.loadForward(key, lastTs, lastTs + slices[0], lResult.size() - lastIdx, chunkSize + 1, param);
+        long highestExcluded = lastTs + slices[0];
+        Loader.Result<? extends V> result = loader.loadForward(key, lastTs, highestExcluded, lResult.size() - lastIdx, chunkSize + 1, param);
         lResult.addAll(result.getData());
-        return result;
+        return result.getData().size() == chunkSize + 1 ? timestamper.getTs(lResult.get(lResult.size() - 1)) : highestExcluded;
     }
 
     /**
@@ -124,12 +124,24 @@ public class TimestampedCache<K, V, P> {
      * @param timestamp Il timestamp da cui i dati iniziano
      * @param chunkSeq La chunk sequence da cui i dati iniziano. Se non si ha la certezza di dover aggiungere dati
      *                 ad un chunk di slicing massimo, mettere -1.
+     * @param resultEndTimestamp Indica che tra il timestamp dell'ultimo dato e questo timestamp (escluso) non ci sono altri dati.
+     *                           Puo' essere minore o uguale al timestamp dell'ultimo dato, e in questo caso non indica nulla.
      * @param result I dati da inserire in cache
      * @return Il chunk associato a (timestamp, chunkSeq)
      */
-    private Chunk<V> arrangeFwd(K key, long timestamp, int chunkSeq, List<V> result) {
+    private Chunk<V> arrangeFwd(K key, long timestamp, int chunkSeq, long resultEndTimestamp, List<V> result) {
         Chunk<V> ret = null;
         int l = slices.length;
+
+        if (result.isEmpty()) {
+            if (chunkSeq > 0) {
+                throw new IllegalStateException("Did not expect this");
+            }
+            int s = minSliceLevel(timestamp);
+            Chunk<V> chunk = new Chunk<>(ImmutableList.of(), s, true, false, false, false);
+            cache.put(new Key<>(key, timestamp, 0), chunk);
+            return chunk;
+        }
 
         outer: while (!result.isEmpty()) {
             if (chunkSeq >= 0) {
@@ -139,7 +151,8 @@ public class TimestampedCache<K, V, P> {
                 position = (position >= 0 ? position : -position - 1);
                 int chunkEnd = Math.min(chunkSize, position);
 
-                Chunk<V> chunk = new Chunk<>(result.subList(0, chunkEnd), l - 1, chunkEnd == chunkSize || ret == null, position > chunkSize, false, false);
+                boolean complete = chunkEnd < result.size() || endTimestamp <= resultEndTimestamp;
+                Chunk<V> chunk = new Chunk<>(result.subList(0, chunkEnd), l - 1, complete, position > chunkSize, false, false);
                 cache.put(new Key<>(key, timestamp, chunkSeq), chunk);
                 result = result.subList(chunkEnd, result.size());
                 ret = (ret == null ? chunk : ret);
@@ -149,19 +162,18 @@ public class TimestampedCache<K, V, P> {
                 int s = minSliceLevel(timestamp);
                 for (; s < l; s++) {
                     long endTimestamp = timestamp + slices[s];
-                    int position = binarySearch(result, timestamper, endTimestamp, true);
-                    position = (position >= 0 ? position : -position - 1);
-                    if (position <= chunkSize) {
+                    int chunkEnd = binarySearch(result, timestamper, endTimestamp, true);
+                    chunkEnd = (chunkEnd >= 0 ? chunkEnd : -chunkEnd - 1);
+                    if (chunkEnd <= chunkSize) {
                         // Ho trovato un livello di slicing che produce uno slice non oltre la massima dimensione
                         // Non ho bisogno di chunking
 
                         // Il chunk e' completo se ho altri risultati oltre il suo termine,
-                        // o se siamo al massimo slicing ed e' l'arrangement dei risultato originali della load
-                        // (in questo caso se ho meno dati della chunkSize e' perche' ho raggiunto il bordo del timestamp)
-                        boolean complete = position < result.size() || (s == 0 && ret == null);
-                        Chunk<V> chunk = new Chunk<>(result.subList(0, position), s, complete, false, false, false);
+                        // o se so che non ci sono altri dati oltre endTimestamp
+                        boolean complete = chunkEnd < result.size() || endTimestamp <= resultEndTimestamp;
+                        Chunk<V> chunk = new Chunk<>(result.subList(0, chunkEnd), s, complete, false, false, false);
                         cache.put(new Key<>(key, timestamp, 0), chunk);
-                        result = result.subList(position, result.size());
+                        result = result.subList(chunkEnd, result.size());
                         ret = (ret == null ? chunk : ret);
                         chunkSeq = -1;
                         timestamp = endTimestamp;
@@ -172,7 +184,7 @@ public class TimestampedCache<K, V, P> {
             }
         }
 
-        return ret;
+        return Preconditions.checkNotNull(ret);
     }
 
     static <V> int binarySearch(List<? extends V> elements, Timestamper<? super V> timestamper, long ts, boolean firstIfTied) {
@@ -239,6 +251,15 @@ public class TimestampedCache<K, V, P> {
             this.hasNextChunk = hasNextChunk;
             this.endOfDataForward = endOfDataForward;
             this.endOfDataBackwards = endOfDataBackwards;
+            if (data.isEmpty() && !complete) {
+                throw new IllegalStateException("Empty chunks must be complete");
+            }
+            if (data.isEmpty() && hasNextChunk) {
+                throw new IllegalStateException("Empty chunks cannot have a next chunk");
+            }
+            if (!complete && hasNextChunk) {
+                throw new IllegalStateException("An incomplete chunk cannot know it has a next chunk");
+            }
         }
 
         boolean hasNextChunk() {
