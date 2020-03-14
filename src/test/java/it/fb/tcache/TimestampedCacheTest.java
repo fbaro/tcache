@@ -132,12 +132,18 @@ public class TimestampedCacheTest {
         }
     }
 
+    @Test
+    public void verifyDoesNotLoadFullTopLevelSliceToAnswerRequestForSliceEnd() {
+        test(new long[] {5000, 1000, 100}, 4, 4900, 5000);
+        assertEquals(3, loadCount);
+    }
+
     private void test(long[] chunks, int chunkSize, long start, long end) {
         //System.out.println("Testing chunkSize = [" + chunkSize + "], start = [" + start + "], end = [" + end + "]");
         TimestampedCache<String, Long, Void> cache = new TimestampedCache<>(chunkSize, chunks, v -> v, loader);
         List<Long> result = new ArrayList<>();
         cache.getForward("", start, end, null)
                 .forEachRemaining(result::add);
-        assertEquals("Error a chunk size " + chunkSize + " start = " + start + " end = " + end, loadFwd(start, end, 0, 1000).getData(), result);
+        assertEquals("Error at chunk size " + chunkSize + " start = " + start + " end = " + end, loadFwd(start, end, 0, 1000).getData(), result);
     }
 }

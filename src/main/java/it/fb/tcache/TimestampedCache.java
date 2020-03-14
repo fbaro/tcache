@@ -56,19 +56,39 @@ public class TimestampedCache<K, V, P> {
     public Iterator<V> getForward(K key, long lowestTimestamp, long highestTimestamp, P param) {
         return new AbstractIterator<V>() {
 
-            private long nextTimestamp = (lowestTimestamp / slices[0]) * slices[0];
+            private long nextTimestamp;
             private int nextChunkSeq = 0;
-            private Chunk<V> curChunk = Chunk.empty(0, false, false);
-            private PeekingIterator<V> curChunkIterator = curChunk.iterator();
+            private Chunk<V> curChunk = null;
+            private PeekingIterator<V> curChunkIterator = null;
+
+            private void init() {
+                // Nella ricerca del primo non devo riempire linearmente la cache,
+                // ma posso "saltare" pezzi per arrivare in fretta al punto richiesto dall'utente
+                for (long slice : slices) {
+                    nextTimestamp = (lowestTimestamp / slice) * slice;
+                    curChunk = getChunkFwd(key, nextTimestamp, 0, param);
+                    if (nextTimestamp + slices[curChunk.sliceLevel] >= lowestTimestamp) {
+                        nextTimestamp += slice;
+                        curChunkIterator = curChunk.iterator();
+                        return;
+                    }
+                }
+                throw new IllegalStateException("Should not be reachable");
+            }
 
             @Override
             protected V computeNext() {
-                if (curChunkIterator.hasNext()) {
+                if (curChunk == null) {
+                    init();
+                }
+                while (curChunkIterator.hasNext()) {
                     V ret = curChunkIterator.next();
-                    if (timestamper.getTs(ret) >= highestTimestamp) {
+                    long retTs = timestamper.getTs(ret);
+                    if (retTs >= highestTimestamp) {
                         return endOfData();
+                    } else if (retTs >= lowestTimestamp) {
+                        return ret;
                     }
-                    return ret;
                 }
                 while (!curChunk.endOfDataForward && nextTimestamp < highestTimestamp) { // TODO: Posso anche terminare a meta' di un chunk
                     curChunk = getChunkFwd(key, nextTimestamp, nextChunkSeq, param);
