@@ -1,6 +1,7 @@
 package it.fb.tcache;
 
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.Lists;
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -24,10 +25,20 @@ public class TimestampedCacheTest {
         for (long l = 0; l < 50; l++) {
             data.add(l * 100);
         }
-        loader = (key, lowestIncluded, highestExcluded, offset, limit, param) -> {
-            //System.out.println("key = [" + key + "], lowestIncluded = [" + lowestIncluded + "], highestExcluded = [" + highestExcluded + "], offset = [" + offset + "], limit = [" + limit + "], param = [" + param + "]");
-            loadCount++;
-            return loadFwd(lowestIncluded, highestExcluded, offset, limit);
+        loader = new Loader<String, Long, Void>() {
+            @Override
+            public Result<Long> loadForward(String key, long lowestIncluded, long highestExcluded, int offset, int limit, Void param) {
+                //System.out.println("loadForward key = [" + key + "], lowestIncluded = [" + lowestIncluded + "], highestExcluded = [" + highestExcluded + "], offset = [" + offset + "], limit = [" + limit + "], param = [" + param + "]");
+                loadCount++;
+                return TimestampedCacheTest.this.loadFwd(lowestIncluded, highestExcluded, offset, limit);
+            }
+
+            @Override
+            public Result<Long> loadBackwards(String key, long lowestIncluded, long highestExcluded, int offset, int limit, Void param) {
+                //System.out.println("loadBackwards key = [" + key + "], lowestIncluded = [" + lowestIncluded + "], highestExcluded = [" + highestExcluded + "], offset = [" + offset + "], limit = [" + limit + "], param = [" + param + "]");
+                loadCount++;
+                return TimestampedCacheTest.this.loadBkw(lowestIncluded, highestExcluded, offset, limit);
+            }
         };
     }
 
@@ -38,7 +49,26 @@ public class TimestampedCacheTest {
                 .skip(offset)
                 .limit(limit)
                 .collect(Collectors.toList());
-        return new Loader.StdResult<>(ret, ret.size() < limit && highestExcluded > data.get(data.size() - 1));
+        return new Loader.StdResult<>(ret, ret.size() < limit && highestExcluded >= data.get(data.size() - 1));
+    }
+
+    private Loader.Result<Long> loadBkw(long lowestIncluded, long highestExcluded, int offset, int limit) {
+        List<Long> ret = Lists.reverse(data).stream()
+                .filter(l -> l >= lowestIncluded)
+                .filter(l -> l < highestExcluded)
+                .skip(offset)
+                .limit(limit)
+                .collect(Collectors.toList());
+        return new Loader.StdResult<>(ret, ret.size() < limit && lowestIncluded < data.get(data.size() - 1));
+    }
+
+    private List<Long> getBkw(long lowestExcluded, long highestIncluded, int offset, int limit) {
+        return Lists.reverse(data).stream()
+                .filter(l -> l > lowestExcluded)
+                .filter(l -> l <= highestIncluded)
+                .skip(offset)
+                .limit(limit)
+                .collect(Collectors.toList());
     }
 
     @Test
@@ -136,6 +166,13 @@ public class TimestampedCacheTest {
     public void verifyDoesNotLoadFullTopLevelSliceToAnswerRequestForSliceEnd() {
         test(new long[] {5000, 1000, 100}, 4, 4900, 5000);
         assertEquals(3, loadCount);
+        test(new long[] {5000, 1000, 100}, 4, 0, 2000);
+    }
+
+    @Test
+    public void verifyBackwards0() {
+        long[] chunks = {4000, 2000, 500};
+        back(chunks, 10, 0, 1000);
     }
 
     private void test(long[] chunks, int chunkSize, long start, long end) {
@@ -145,5 +182,14 @@ public class TimestampedCacheTest {
         cache.getForward("", start, end, null)
                 .forEachRemaining(result::add);
         assertEquals("Error at chunk size " + chunkSize + " start = " + start + " end = " + end, loadFwd(start, end, 0, 1000).getData(), result);
+    }
+
+    private void back(long[] chunks, int chunkSize, long start, long end) {
+        //System.out.println("Testing chunkSize = [" + chunkSize + "], start = [" + start + "], end = [" + end + "]");
+        TimestampedCache<String, Long, Void> cache = new TimestampedCache<>(chunkSize, chunks, v -> v, loader);
+        List<Long> result = new ArrayList<>();
+        cache.getBackwards("", start, end, null)
+                .forEachRemaining(result::add);
+        assertEquals("Error at chunk size " + chunkSize + " start = " + start + " end = " + end, getBkw(start, end, 0, 1000), result);
     }
 }
