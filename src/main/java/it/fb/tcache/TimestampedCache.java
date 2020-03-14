@@ -17,6 +17,8 @@ import java.util.Objects;
 
 public class TimestampedCache<K, V, P> {
 
+    public static final int LAST = Integer.MAX_VALUE;
+
     private final int chunkSize;
     private final long[] slices;
     /**
@@ -153,29 +155,60 @@ public class TimestampedCache<K, V, P> {
      * @param endTs Il timestamp di fine del chunk da cercare
      * @return Un chunk, o {@code null}
      */
-    private Chunk<V> getChunkBack(K key, long endTs, int chunkSeq, P param) {
-        int l = slices.length;
-        for (int s = l - 1; s >= minSliceLevel(endTs); s--) {
-            long startTs = endTs - slices[s];
-            Key<K> k = new Key<>(key, startTs, 0);
-            @Nullable Chunk<V> chunk = cache.getIfPresent(k);
-            if (chunk != null && chunk.complete) {
-                if (chunk.hasNextChunk()) {
-                    throw new UnsupportedOperationException("TODO");
-                }
-                if (chunk.sliceLevel == s) {
-                    return chunk;
-                }
-                // Ho trovato uno slicing piu' basso di quello che mi aspettavo
-                // Significa che lo slice che contiene i miei dati sarebbe a slicing piu' alto,
-                // e lo ho gia' cercato senza trovarlo
-                break;
-            }
+    private GetBackResult<V> getChunkBack(K key, long endTs, int chunkSeq, P param) {
+        // Da fuori ho gia' iniziato a scorrere i chunk in avanti: continuo sulla cache standard
+        if (chunkSeq != LAST && chunkSeq >= 0) {
+            long startTs = endTs - slices[slices.length - 1];
+            return new GetBackResult<>(getChunkFwd(key, startTs, chunkSeq, param), chunkSeq, 0);
         }
+
+        if (chunkSeq == LAST) {
+            // Non ho info specifiche: provo a cercare nella cache in avanti
+            int l = slices.length;
+            for (int s = l - 1; s >= minSliceLevel(endTs); s--) {
+                long startTs = endTs - slices[s];
+                Key<K> k = new Key<>(key, startTs, 0);
+                @Nullable Chunk<V> chunk = cache.getIfPresent(k);
+                if (chunk != null && chunk.complete) {
+                    if (chunk.hasNextChunk()) {
+                        throw new UnsupportedOperationException("TODO");
+                    }
+                    if (chunk.sliceLevel == s) {
+                        return new GetBackResult<>(chunk, 0, 0);
+                    }
+                    // Ho trovato uno slicing piu' basso di quello che mi aspettavo
+                    // Significa che lo slice che contiene i miei dati sarebbe a slicing piu' alto,
+                    // e lo ho gia' cercato senza trovarlo
+                    break;
+                }
+            }
+            chunkSeq = -1;
+        }
+
         // A questo punto i dati non sono nella cache standard
         // Cerco nella cache dei parziali all'indietro
-        Chunk<V> pChunk = pCache.getIfPresent(new Key<>(key, endTs, 0));
-        if (pChunk == null) {
+        Key<K> pKey = new Key<>(key, endTs, chunkSeq);
+        Chunk<V> pChunk = pCache.getIfPresent(pKey);
+        if (pChunk != null && pChunk.complete) {
+            return new GetBackResult<>(pChunk, chunkSeq, 0);
+        }
+
+        // Non sono neanche li'!
+        // Ricostruisco quel che so dello slice, aggiungo un po' di dati e rifaccio una arrange
+        List<V> chunkUnion = new ArrayList<>();
+        for (int i = -1; i > chunkSeq; i--) {
+            GetBackResult<V> chunkBack = getChunkBack(key, endTs, i, param);
+            if (chunkBack.chunkSeq != i) {
+                throw new UnsupportedOperationException("TODO");
+            }
+            chunkUnion.addAll(chunkBack.chunk.data);
+        }
+        if (pChunk != null) {
+            chunkUnion.addAll(pChunk.data);
+        }
+
+        if (chunkUnion.isEmpty()) {
+            Preconditions.checkArgument(chunkSeq == -1);
             // I dati mancano completamente
             Loader.Result<? extends V> result = loader.loadBackwards(key, endTs - slices[0], endTs, 0, chunkSize + 1, param);
             List<V> lResult = ImmutableList.copyOf(result.getData());
@@ -183,14 +216,25 @@ public class TimestampedCache<K, V, P> {
             return arrangeBack(key, endTs, resultStartTs, lResult);
         } else {
             // Completo i dati parziali facendo un'altra load all'indietro
-            long lastTs = pChunk.getLastTs(timestamper);
-            int lastTsFirstIdx = binarySearchBack(pChunk.data, timestamper, lastTs, true);
-            long loadEndTs = (lastTsFirstIdx == 0 ? endTs : timestamper.getTs(pChunk.data.get(lastTsFirstIdx - 1)));
-            Loader.Result<? extends V> result = loader.loadBackwards(key, loadEndTs - slices[0], loadEndTs, pChunk.data.size() - lastTsFirstIdx, chunkSize + 1, param);
-            List<V> lResult = new ArrayList<>(pChunk.data);
-            lResult.addAll(result.getData());
-            long resultStartTs = result.getData().size() == chunkSize + 1 ? timestamper.getTs(lResult.get(lResult.size() - 1)) : endTs - slices[0];
-            return arrangeBack(key, endTs, resultStartTs, ImmutableList.copyOf(lResult));
+            long lastTs = timestamper.getTs(chunkUnion.get(chunkUnion.size() - 1));
+            int lastTsFirstIdx = binarySearchBack(chunkUnion, timestamper, lastTs, true);
+            long loadEndTs = (lastTsFirstIdx == 0 ? endTs : timestamper.getTs(chunkUnion.get(lastTsFirstIdx - 1)));
+            Loader.Result<? extends V> result = loader.loadBackwards(key, loadEndTs - slices[0], loadEndTs, chunkUnion.size() - lastTsFirstIdx, chunkSize + 1, param);
+            chunkUnion.addAll(result.getData());
+            long resultStartTs = result.getData().size() == chunkSize + 1 ? timestamper.getTs(chunkUnion.get(chunkUnion.size() - 1)) : endTs - slices[0];
+            GetBackResult<V> arranged = arrangeBack(key, endTs, resultStartTs, ImmutableList.copyOf(chunkUnion));
+            if (arranged.chunk.inverted) {
+                return new GetBackResult<>(pCache.getIfPresent(pKey), chunkSeq, 0); // TODO: Problemi di concorrenza sulla getIfPresent?
+            } else {
+                // Ho raddrizzato i dati
+                // Quindi in pCache non trovo quello che volevo, devo andare sulla cache normale
+                // Devo restituire quindi un chunk parecchio diverso da quello richiesto
+                // e probabilmente devo riprendere da un certo indice dentro quel chunk
+                return new GetBackResult<>(
+                        getChunkFwd(key, endTs - slices[slices.length - 1], arranged.chunkSeq + chunkSeq + 1, param),
+                        arranged.chunkSeq + chunkSeq + 1,
+                        chunkSize - arranged.chunk.data.size());
+            }
         }
     }
 
@@ -227,7 +271,7 @@ public class TimestampedCache<K, V, P> {
                 throw new IllegalStateException("Did not expect this");
             }
             int s = minSliceLevel(timestamp);
-            Chunk<V> chunk = new Chunk<>(ImmutableList.of(), s, true, false, false, false);
+            Chunk<V> chunk = new Chunk<>(ImmutableList.of(), s, true, false, false, false, false);
             cache.put(new Key<>(key, timestamp, 0), chunk);
             return chunk;
         }
@@ -242,7 +286,7 @@ public class TimestampedCache<K, V, P> {
                 int chunkEnd = Math.min(chunkSize, position);
 
                 boolean complete = chunkEnd < result.size() || endTimestamp <= resultEndTimestamp;
-                Chunk<V> chunk = new Chunk<>(result.subList(0, chunkEnd), l - 1, complete, position > chunkSize, false, false);
+                Chunk<V> chunk = new Chunk<>(result.subList(0, chunkEnd), l - 1, complete, position > chunkSize, false, false, false);
                 cache.put(new Key<>(key, timestamp, chunkSeq), chunk);
                 result = result.subList(chunkEnd, result.size());
                 ret = (ret == null ? chunk : ret);
@@ -261,7 +305,7 @@ public class TimestampedCache<K, V, P> {
                         // Il chunk e' completo se ho altri risultati oltre il suo termine,
                         // o se so che non ci sono altri dati oltre endTimestamp
                         boolean complete = chunkEnd < result.size() || endTimestamp <= resultEndTimestamp;
-                        Chunk<V> chunk = new Chunk<>(result.subList(0, chunkEnd), s, complete, false, false, false);
+                        Chunk<V> chunk = new Chunk<>(result.subList(0, chunkEnd), s, complete, false, false, false, false);
                         cache.put(new Key<>(key, timestamp, 0), chunk);
                         result = result.subList(chunkEnd, result.size());
                         ret = (ret == null ? chunk : ret);
@@ -288,8 +332,8 @@ public class TimestampedCache<K, V, P> {
      * @param result               I dati da inserire in cache, ordinati per timestamp decrescente
      * @return Il chunk che termina in endTs e contiene i primi dati presenti in result
      */
-    private Chunk<V> arrangeBack(K key, long endTs, long resultStartTimestamp, List<V> result) {
-        Chunk<V> ret = null;
+    private GetBackResult<V> arrangeBack(K key, long endTs, long resultStartTimestamp, List<V> result) {
+        GetBackResult<V> ret = null;
         int l = slices.length;
 
         outer:
@@ -297,50 +341,55 @@ public class TimestampedCache<K, V, P> {
             int s = minSliceLevel(endTs);
             for (; s < l; s++) {
                 long startTs = endTs - slices[s];
-                int chunkEnd = binarySearchBack(result, timestamper, startTs, true);
-                chunkEnd = (chunkEnd >= 0 ? chunkEnd : -chunkEnd - 2) + 1; // L'estremo inferiore, se trovato, va incluso
-                if (chunkEnd <= chunkSize) {
+                int sliceEnd = binarySearchBack(result, timestamper, startTs, true);
+                sliceEnd = (sliceEnd >= 0 ? sliceEnd : -sliceEnd - 2) + 1; // L'estremo inferiore, se trovato, va incluso
+                if (sliceEnd <= chunkSize) {
                     // Ho trovato un livello di slicing che produce uno slice non oltre la massima dimensione
                     // Non ho bisogno di chunking
 
                     // Il chunk e' completo se ho altri risultati oltre il suo inizio,
                     // o se so che non ci sono altri dati oltre startTs
-                    boolean complete = chunkEnd < result.size() || startTs >= resultStartTimestamp;
+                    boolean complete = sliceEnd < result.size() || startTs >= resultStartTimestamp;
                     if (complete) {
-                        Chunk<V> chunk = new Chunk<>(Lists.reverse(result.subList(0, chunkEnd)), s, true, false, false, false);
+                        Chunk<V> chunk = new Chunk<>(Lists.reverse(result.subList(0, sliceEnd)), s, true, false, false, false, false);
                         // TODO: Svuotare la pCache? Come?
                         cache.put(new Key<>(key, startTs, 0), chunk);
-                        ret = (ret == null ? chunk : ret);
+                        ret = (ret == null ? new GetBackResult<>(chunk, 0, 0) : ret);
                     } else {
-                        Chunk<V> chunk = new Chunk<>(result.subList(0, chunkEnd), s, false, false, false, false);
+                        Chunk<V> chunk = new Chunk<>(result.subList(0, sliceEnd), s, false, false, false, false, true);
                         pCache.put(new Key<>(key, endTs, 0), chunk);
-                        ret = (ret == null ? chunk : ret);
+                        ret = (ret == null ? new GetBackResult<>(chunk, 0, 0) : ret);
                     }
-                    result = result.subList(chunkEnd, result.size());
+                    result = result.subList(sliceEnd, result.size());
                     endTs = startTs;
                     continue outer;
                 }
                 if (s == l - 1) {
                     // Sono arrivato allo slicing massimo
-                    boolean sliceComplete = chunkEnd < result.size() || startTs >= resultStartTimestamp;
-                    int numSlices = chunkEnd / chunkSize + (chunkEnd % chunkSize == 0 ? 0 : 1);
-                    for (int i = 0; i < numSlices; i++) {
-                        int startIdx = i * chunkSize;
-                        int endIdx = Math.min((i + 1) * chunkSize, chunkEnd);
-                        if (sliceComplete) {
+                    boolean sliceComplete = sliceEnd < result.size() || startTs >= resultStartTimestamp;
+                    int numChunks = sliceEnd / chunkSize + (sliceEnd % chunkSize == 0 ? 0 : 1);
+                    if (sliceComplete) {
+                        List<V> sliceData = Lists.reverse(result.subList(0, sliceEnd));
+                        for (int i = numChunks - 1; i >= 0; i--) {
+                            int startIdx = i * chunkSize;
+                            int endIdx = Math.min((i + 1) * chunkSize, sliceEnd);
                             // Lo slice e' completo: metto tutti i chunk nella cache standard
-                            Chunk<V> chunk = new Chunk<>(Lists.reverse(result.subList(startIdx, endIdx)), s, true, false, false, false);
-                            // TODO: Svuotare la pCache? Come?
-                            cache.put(new Key<>(key, startTs, numSlices - i - 1), chunk);
-                            ret = (ret == null ? chunk : ret);
-                        } else {
+                            Chunk<V> chunk = new Chunk<>(sliceData.subList(startIdx, endIdx), s, true, i < numChunks - 1, false, false, false);
+                            cache.put(new Key<>(key, startTs, i), chunk);
+                            ret = (ret == null ? new GetBackResult<>(chunk, i, 0) : ret);
+                        }
+                        // TODO: Svuotare la pCache? Come?
+                    } else {
+                        for (int i = 0; i < numChunks; i++) {
+                            int startIdx = i * chunkSize;
+                            int endIdx = Math.min((i + 1) * chunkSize, sliceEnd);
                             // Lo slice e' incompleto: metto tutti i chunk nella cache prev, non raddrizzati e con i sequenziali negativi
-                            Chunk<V> chunk = new Chunk<>(result.subList(startIdx, endIdx), s, i < numSlices - 1, false, false, false);
+                            Chunk<V> chunk = new Chunk<>(result.subList(startIdx, endIdx), s, i < numChunks - 1, i < numChunks - 1, false, false, true);
                             pCache.put(new Key<>(key, endTs, -i - 1), chunk);
-                            ret = (ret == null ? chunk : ret);
+                            ret = (ret == null ? new GetBackResult<>(chunk, -i - 1, 0) : ret);
                         }
                     }
-                    result = result.subList(chunkEnd, result.size());
+                    result = result.subList(sliceEnd, result.size());
                     endTs = startTs;
                     continue outer;
                 }
@@ -364,20 +413,25 @@ public class TimestampedCache<K, V, P> {
         return new AbstractIterator<V>() {
 
             private long nextEndTimestamp;
-            private Chunk<V> curChunk = null;
+            private int nextChunkSeq;
+            private GetBackResult<V> curChunk = null;
             private PeekingIterator<V> curChunkIterator;
 
             private void init() {
                 for (long slice : slices) {
                     nextEndTimestamp = slice + (highestTimestamp / slice) * slice;
-                    curChunk = getChunkBack(key, nextEndTimestamp, 0, param);
-                    if (nextEndTimestamp - slices[curChunk.sliceLevel] <= highestTimestamp) {
-                        if (curChunk.hasNextChunk()) {
-                            throw new UnsupportedOperationException("TODO");
+                    curChunk = getChunkBack(key, nextEndTimestamp, LAST, param);
+                    if (nextEndTimestamp - slices[curChunk.chunk.sliceLevel] <= highestTimestamp) {
+                        curChunkIterator = curChunk.chunk.backIterator();
+                        if (curChunk.hasPrevChunk()) {
+                            nextChunkSeq = curChunk.chunkSeq - 1;
                         } else {
-                            nextEndTimestamp -= slices[curChunk.sliceLevel];
+                            nextEndTimestamp -= slices[curChunk.chunk.sliceLevel];
+                            nextChunkSeq = LAST;
                         }
-                        curChunkIterator = curChunk.backIterator();
+                        for (int i = 0; i < curChunk.toSkip; i++) {
+                            curChunkIterator.next();
+                        }
                         return;
                     }
                 }
@@ -390,7 +444,7 @@ public class TimestampedCache<K, V, P> {
                     init();
                 }
                 // TODO: Gestire chunking
-                while (true){
+                while (true) {
                     while (curChunkIterator.hasNext()) {
                         V ret = curChunkIterator.next();
                         long retTs = timestamper.getTs(ret);
@@ -405,9 +459,17 @@ public class TimestampedCache<K, V, P> {
                         return endOfData();
                     }
 
-                    curChunk = getChunkBack(key, nextEndTimestamp, 0, param);
-                    curChunkIterator = curChunk.backIterator();
-                    nextEndTimestamp = nextEndTimestamp - slices[curChunk.sliceLevel];
+                    curChunk = getChunkBack(key, nextEndTimestamp, nextChunkSeq, param);
+                    curChunkIterator = curChunk.chunk.backIterator();
+                    if (curChunk.hasPrevChunk()) {
+                        nextChunkSeq = curChunk.chunkSeq - 1;
+                    } else {
+                        nextEndTimestamp -= slices[curChunk.chunk.sliceLevel];
+                        nextChunkSeq = LAST;
+                    }
+                    for (int i = 0; i < curChunk.toSkip; i++) {
+                        curChunkIterator.next();
+                    }
                 }
             }
         };
@@ -473,14 +535,16 @@ public class TimestampedCache<K, V, P> {
         private final boolean hasNextChunk;
         private final boolean endOfDataForward;
         private final boolean endOfDataBackwards;
+        private final boolean inverted;
 
-        Chunk(List<V> data, int sliceLevel, boolean complete, boolean hasNextChunk, boolean endOfDataForward, boolean endOfDataBackwards) {
+        Chunk(List<V> data, int sliceLevel, boolean complete, boolean hasNextChunk, boolean endOfDataForward, boolean endOfDataBackwards, boolean inverted) {
             this.data = data;
             this.sliceLevel = sliceLevel;
             this.complete = complete;
             this.hasNextChunk = hasNextChunk;
             this.endOfDataForward = endOfDataForward;
             this.endOfDataBackwards = endOfDataBackwards;
+            this.inverted = inverted;
             if (data.isEmpty() && !complete) {
                 throw new IllegalStateException("Empty chunks must be complete");
             }
@@ -505,19 +569,42 @@ public class TimestampedCache<K, V, P> {
 
         static <V> Chunk<V> empty(int sliceLevel, boolean endOfDataForward, boolean endOfDataBackwards) {
             // TODO: Cache
-            return new Chunk<>(ImmutableList.of(), sliceLevel, true, false, endOfDataForward, endOfDataBackwards);
+            return new Chunk<>(ImmutableList.of(), sliceLevel, true, false, endOfDataForward, endOfDataBackwards, false);
         }
 
         public PeekingIterator<V> iterator() {
-            return Iterators.peekingIterator(data.iterator());
+            if (inverted) {
+                return Iterators.peekingIterator(Lists.reverse(data).iterator());
+            } else {
+                return Iterators.peekingIterator(data.iterator());
+            }
         }
 
         public PeekingIterator<V> backIterator() {
-            return Iterators.peekingIterator(Lists.reverse(data).iterator());
+            if (!inverted) {
+                return Iterators.peekingIterator(Lists.reverse(data).iterator());
+            } else {
+                return Iterators.peekingIterator(data.iterator());
+            }
+        }
+    }
+
+    private static final class GetBackResult<V> {
+        public final Chunk<V> chunk;
+        public final int chunkSeq;
+        public final int toSkip;
+
+        public GetBackResult(Chunk<V> chunk, int chunkSeq, int toSkip) {
+            this.chunk = chunk;
+            this.chunkSeq = chunkSeq;
+            this.toSkip = toSkip;
         }
 
-        public long getLastTs(Timestamper<? super V> timestamper) {
-            return timestamper.getTs(data.get(data.size() - 1));
+        boolean hasPrevChunk() {
+            if (!chunk.complete) {
+                throw new IllegalStateException("Chunk is not complete, hasPrevChunk is not meaningful");
+            }
+            return (chunk.inverted && chunk.hasNextChunk) || (!chunk.inverted && chunkSeq > 0);
         }
     }
 
