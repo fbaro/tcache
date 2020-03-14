@@ -17,6 +17,7 @@ public class TimestampedCacheTest {
      */
     private final List<Long> data;
     private final Loader<String, Long, Void> loader;
+    private int loadCount = 0;
 
     public TimestampedCacheTest() {
         data = new ArrayList<>();
@@ -25,6 +26,7 @@ public class TimestampedCacheTest {
         }
         loader = (key, lowestIncluded, highestExcluded, offset, limit, param) -> {
             //System.out.println("key = [" + key + "], lowestIncluded = [" + lowestIncluded + "], highestExcluded = [" + highestExcluded + "], offset = [" + offset + "], limit = [" + limit + "], param = [" + param + "]");
+            loadCount++;
             return loadFwd(lowestIncluded, highestExcluded, offset, limit);
         };
     }
@@ -46,6 +48,17 @@ public class TimestampedCacheTest {
             assertEquals(
                     Collections.binarySearch(data0, search),
                     TimestampedCache.binarySearch(data0, v -> v, search, true));
+        }
+    }
+
+    @Test
+    public void verifyCustomBinarySearchBackwardsWorks() {
+        ImmutableList<Long> data0 = ImmutableList.of(10L, 8L, 6L, 4L, 2L);
+        for (int i = 0; i < 5; i++) {
+            assertEquals(i, TimestampedCache.binarySearchBack(data0, v -> v, 10L - 2 * i, true));
+        }
+        for (int i = -1; i >= -6; i--) {
+            assertEquals(i, TimestampedCache.binarySearchBack(data0, v -> v, 13L + 2 * i, true));
         }
     }
 

@@ -6,6 +6,7 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Iterators;
+import com.google.common.collect.Lists;
 import com.google.common.collect.PeekingIterator;
 import org.checkerframework.checker.nullness.qual.Nullable;
 
@@ -18,7 +19,20 @@ public class TimestampedCache<K, V, P> {
 
     private final int chunkSize;
     private final long[] slices;
+    /**
+     * Contiene i dati standard, con tutto l'algoritmo di slicing/chunking
+     */
     private final Cache<Key<K>, Chunk<V>> cache = Caffeine.newBuilder().build();
+    /**
+     * Cache "temporanea" dei dati recuperati all'indietro, ma ancora non sufficienti
+     * per decidere il loro posto nella cache principale. Succede quando si raggiunge lo
+     * slicing massimo, e non si hanno abbastanza dati per riempire lo slice.
+     * I chunk in questa cache hanno sempre slicing massimo e i dati ordinati per
+     * timestamp decrescente. I sequenziali dei chunk sono tutti negativi, con -1 ad indicare
+     * il chunk piu' vicino al timestamp di fine dello slice.
+     * TODO: Verificare il contenuto di questa cache anche quando si fanno ricerche all'avanti
+     */
+    private final Cache<Key<K>, Chunk<V>> prevChunkCache = Caffeine.newBuilder().build();
     private final Loader<? super K, ? extends V, ? super P> loader;
     private final Timestamper<? super V> timestamper;
 
@@ -31,18 +45,18 @@ public class TimestampedCache<K, V, P> {
 
     /**
      * Retrieves data from the cache belonging to the specified key, starting
-     * from {@code startTimestamp}.
+     * from {@code lowestTimestamp}.
      *
-     * @param key            The key
-     * @param startTimestamp The beginning timestamp (included)
-     * @param endTimestamp   The ending timestamp (excluded)
-     * @param param          The parameter to pass to the cache loader, if necessary
+     * @param key              The key
+     * @param lowestTimestamp  The beginning timestamp (included)
+     * @param highestTimestamp The ending timestamp (excluded)
+     * @param param            The parameter to pass to the cache loader, if necessary
      * @return An iterator on the results
      */
-    public Iterator<V> getForward(K key, long startTimestamp, long endTimestamp, P param) {
+    public Iterator<V> getForward(K key, long lowestTimestamp, long highestTimestamp, P param) {
         return new AbstractIterator<V>() {
 
-            private long nextTimestamp = (startTimestamp / slices[0]) * slices[0];
+            private long nextTimestamp = (lowestTimestamp / slices[0]) * slices[0];
             private int nextChunkSeq = 0;
             private Chunk<V> curChunk = Chunk.empty(0, false, false);
             private PeekingIterator<V> curChunkIterator = curChunk.iterator();
@@ -51,13 +65,13 @@ public class TimestampedCache<K, V, P> {
             protected V computeNext() {
                 if (curChunkIterator.hasNext()) {
                     V ret = curChunkIterator.next();
-                    if (timestamper.getTs(ret) >= endTimestamp) {
+                    if (timestamper.getTs(ret) >= highestTimestamp) {
                         return endOfData();
                     }
                     return ret;
                 }
-                while (!curChunk.endOfDataForward && nextTimestamp < endTimestamp) { // TODO: Posso anche terminare a meta' di un chunk
-                    curChunk = getFwd(key, nextTimestamp, nextChunkSeq, param);
+                while (!curChunk.endOfDataForward && nextTimestamp < highestTimestamp) { // TODO: Posso anche terminare a meta' di un chunk
+                    curChunk = getChunkFwd(key, nextTimestamp, nextChunkSeq, param);
                     if (curChunk.hasNextChunk()) {
                         nextChunkSeq++;
                     } else {
@@ -66,10 +80,10 @@ public class TimestampedCache<K, V, P> {
                     }
                     curChunkIterator = curChunk.iterator();
 
-                    while (curChunkIterator.hasNext() && timestamper.getTs(curChunkIterator.peek()) < startTimestamp) {
+                    while (curChunkIterator.hasNext() && timestamper.getTs(curChunkIterator.peek()) < lowestTimestamp) {
                         curChunkIterator.next();
                     }
-                    if (curChunkIterator.hasNext() && timestamper.getTs(curChunkIterator.peek()) < endTimestamp) {
+                    if (curChunkIterator.hasNext() && timestamper.getTs(curChunkIterator.peek()) < highestTimestamp) {
                         return curChunkIterator.next();
                     }
                 }
@@ -78,7 +92,7 @@ public class TimestampedCache<K, V, P> {
         };
     }
 
-    private Chunk<V> getFwd(K key, long timestamp, int chunkSeq, P param) {
+    private Chunk<V> getChunkFwd(K key, long timestamp, int chunkSeq, P param) {
         Key<K> k = new Key<>(key, timestamp, chunkSeq);
         @Nullable Chunk<V> chunk = cache.getIfPresent(k);
         if (chunk != null && chunk.complete) {
@@ -91,7 +105,7 @@ public class TimestampedCache<K, V, P> {
             // Attenzione ai dati con stesso timestamp se lo miglioro
             List<V> lResult = new ArrayList<>();
             for (int c = 0; c < chunkSeq; c++) {
-                lResult.addAll(getFwd(key, timestamp, c, param).data);
+                lResult.addAll(getChunkFwd(key, timestamp, c, param).data);
             }
             if (chunk != null) {
                 lResult.addAll(chunk.data);
@@ -104,6 +118,48 @@ public class TimestampedCache<K, V, P> {
         List<V> lResult = ImmutableList.copyOf(result.getData());
         long resultEndTs = result.getData().size() == chunkSize + 1 ? timestamper.getTs(lResult.get(lResult.size() - 1)) : timestamp + slices[0];
         return arrangeFwd(key, timestamp, -1, resultEndTs, lResult);
+    }
+
+    /**
+     * Cerca il chunk che termina con il timestamp indicato, se e' gia' in cache.
+     * Se non c'e', ritorna {@code null}.
+     *
+     * @param endTs Il timestamp di fine del chunk da cercare
+     * @return Un chunk, o {@code null}
+     */
+    private Chunk<V> getChunkBack(K key, long endTs, int chunkSeq, P param) {
+        int l = slices.length;
+        for (int s = l - 1; s >= 0; s--) { // TODO: Non arrivare fino a 0
+            long startTs = endTs - slices[s];
+            Key<K> k = new Key<>(key, startTs, 0);
+            @Nullable Chunk<V> chunk = cache.getIfPresent(k);
+            if (chunk != null) {
+                if (chunk.sliceLevel == l - 1) {
+                    while (chunk != null && chunk.complete && chunk.hasNextChunk()) {
+                        k = new Key<>(key, startTs, k.chunkSeq + 1);
+                        chunk = cache.getIfPresent(k);
+                    }
+                    if (chunk != null && chunk.complete && chunk.sliceLevel == s) {
+                        // Ho trovato l'ultimo chunk della sequenza: lo restituisco
+                        return chunk;
+                    }
+                    // TODO: Devo completare i dati dei chunk
+                    throw new UnsupportedOperationException("TODO");
+                } else {
+                    if (chunk.complete && chunk.sliceLevel == s) {
+                        return chunk;
+                    }
+                    // TODO: O devo completare i dati del chunk, ho trovato
+                    // TODO: uno slicing piu' alto e il chunk che mi serve effettivamente manca
+                    throw new UnsupportedOperationException("TODO");
+                }
+            }
+        }
+        // I dati mancano completamente
+        Loader.Result<? extends V> result = loader.loadBackwards(key, endTs - slices[0], endTs, 0, chunkSize + 1, param);
+        List<V> lResult = ImmutableList.copyOf(result.getData());
+        long resultStartTs = result.getData().size() == chunkSize + 1 ? timestamper.getTs(lResult.get(lResult.size() - 1)) : endTs - slices[0];
+        return arrangeBack(key, endTs, resultStartTs, lResult);
     }
 
     private long appendForward(K key, P param, List<V> lResult) {
@@ -120,13 +176,14 @@ public class TimestampedCache<K, V, P> {
 
     /**
      * Questa funzione riempie la cache con i dati ricevuti in input.
-     * @param key La chiave dei dati
-     * @param timestamp Il timestamp da cui i dati iniziano
-     * @param chunkSeq La chunk sequence da cui i dati iniziano. Se non si ha la certezza di dover aggiungere dati
-     *                 ad un chunk di slicing massimo, mettere -1.
+     *
+     * @param key                La chiave dei dati
+     * @param timestamp          Il timestamp da cui i dati iniziano
+     * @param chunkSeq           La chunk sequence da cui i dati iniziano. Se non si ha la certezza di dover aggiungere dati
+     *                           ad un chunk di slicing massimo, mettere -1.
      * @param resultEndTimestamp Indica che tra il timestamp dell'ultimo dato e questo timestamp (escluso) non ci sono altri dati.
      *                           Puo' essere minore o uguale al timestamp dell'ultimo dato, e in questo caso non indica nulla.
-     * @param result I dati da inserire in cache
+     * @param result             I dati da inserire in cache
      * @return Il chunk associato a (timestamp, chunkSeq)
      */
     private Chunk<V> arrangeFwd(K key, long timestamp, int chunkSeq, long resultEndTimestamp, List<V> result) {
@@ -143,7 +200,8 @@ public class TimestampedCache<K, V, P> {
             return chunk;
         }
 
-        outer: while (!result.isEmpty()) {
+        outer:
+        while (!result.isEmpty()) {
             if (chunkSeq >= 0) {
                 // So gia' che devo andare allo slicing massimo
                 long endTimestamp = timestamp + slices[l - 1];
@@ -180,6 +238,7 @@ public class TimestampedCache<K, V, P> {
                         continue outer;
                     }
                 }
+                // Cycle back and start chunking
                 chunkSeq = 0;
             }
         }
@@ -187,7 +246,127 @@ public class TimestampedCache<K, V, P> {
         return Preconditions.checkNotNull(ret);
     }
 
+    /**
+     * Riempie la cache con i dati ordinati al contrario che terminano in endTimestamp
+     *
+     * @param key                  La chiave dei dati
+     * @param endTs                Il timestamp in cui i dati terminano, estremo escluso
+     * @param resultStartTimestamp Indica che tra il timestamp del primo dato e questo timestamp (incluso) non ci sono altri dati.
+     *                             Puo' essere maggiore o uguale al timestamp dell'ultimo dato, e in questo caso non indica nulla.
+     * @param result               I dati da inserire in cache, ordinati per timestamp decrescente
+     * @return Il chunk che termina in endTs e contiene i primi dati presenti in result
+     */
+    private Chunk<V> arrangeBack(K key, long endTs, long resultStartTimestamp, List<V> result) {
+        Chunk<V> ret = null;
+        int l = slices.length;
+
+        outer:
+        while (!result.isEmpty()) {
+            int s = minSliceLevel(endTs);
+            for (; s < l; s++) {
+                long startTs = endTs - slices[s];
+                int chunkEnd = binarySearchBack(result, timestamper, startTs, true);
+                chunkEnd = (chunkEnd >= 0 ? chunkEnd : -chunkEnd - 1);
+                if (chunkEnd <= chunkSize) {
+                    // Ho trovato un livello di slicing che produce uno slice non oltre la massima dimensione
+                    // Non ho bisogno di chunking
+
+                    // Il chunk e' completo se ho altri risultati oltre il suo inizio,
+                    // o se so che non ci sono altri dati oltre startTs
+                    boolean complete = chunkEnd < result.size() || startTs >= resultStartTimestamp;
+                    Chunk<V> chunk = new Chunk<>(Lists.reverse(result.subList(0, chunkEnd)), s, complete, false, false, false);
+                    cache.put(new Key<>(key, startTs, 0), chunk);
+                    result = result.subList(chunkEnd, result.size());
+                    ret = (ret == null ? chunk : ret);
+                    endTs = startTs;
+                    continue outer;
+                }
+                if (s == l - 1) {
+                    // Sono arrivato allo slicing massimo
+                    boolean sliceComplete = chunkEnd < result.size() || startTs >= resultStartTimestamp;
+                    int numSlices = chunkEnd / chunkSize + (chunkEnd % chunkSize == 0 ? 0 : 1);
+                    for (int i = 0; i < numSlices; i++) {
+                        int startIdx = i * chunkSize;
+                        int endIdx = Math.min((i + 1) * chunkSize, chunkEnd);
+                        if (sliceComplete) {
+                            // Lo slice e' completo: metto tutti i chunk nella cache standard
+                            Chunk<V> chunk = new Chunk<>(Lists.reverse(result.subList(startIdx, endIdx)), s, true, false, false, false);
+                            cache.put(new Key<>(key, startTs, numSlices - i - 1), chunk);
+                            ret = (ret == null ? chunk : ret);
+                        } else {
+                            // Lo slice e' incompleto: metto tutti i chunk nella cache prev, non raddrizzati e con i sequenziali negativi
+                            Chunk<V> chunk = new Chunk<>(result.subList(startIdx, endIdx), s, i < numSlices - 1, false, false, false);
+                            cache.put(new Key<>(key, startTs, -i - 1), chunk);
+                            ret = (ret == null ? chunk : ret);
+                        }
+                    }
+                    result = result.subList(chunkEnd, result.size());
+                    endTs = startTs;
+                    continue outer;
+                }
+            }
+        }
+
+        return Preconditions.checkNotNull(ret);
+    }
+
+    /**
+     * Retrieves data backwards from the cache belonging to the specified key, starting
+     * from {@code highestTimestamp} and going back to {@code lowestTimestamp}.
+     *
+     * @param key              The key
+     * @param lowestTimestamp  The beginning timestamp (excluded)
+     * @param highestTimestamp The ending timestamp (included)
+     * @param param            The parameter to pass to the cache loader, if necessary
+     * @return An iterator on the results
+     */
+    public Iterator<V> getBackwards(K key, long lowestTimestamp, long highestTimestamp, P param) {
+        return new AbstractIterator<V>() {
+
+            private long curEndTs = 0; // TODO
+            private Chunk<V> curChunk = Chunk.empty(0, false, false);
+            private PeekingIterator<V> curChunkIterator = curChunk.iterator();
+
+            @Override
+            protected V computeNext() {
+                // TODO: Gestire chunking
+                while (curEndTs >= lowestTimestamp) {
+                    while (curChunkIterator.hasNext()) {
+                        V ret = curChunkIterator.next();
+                        long retTs = timestamper.getTs(ret);
+                        if (retTs <= lowestTimestamp) {
+                            return endOfData();
+                        } else if (retTs <= highestTimestamp) {
+                            return ret;
+                        }
+                    }
+
+                    curEndTs = curEndTs - slices[curChunk.sliceLevel];
+                    curChunk = getChunkBack(key, curEndTs, 0, param);
+                }
+                return endOfData();
+            }
+        };
+    }
+
+    private int minSliceLevel(long timestamp) {
+        for (int i = 0, l = slices.length; i < l; i++) {
+            if (timestamp % slices[i] == 0) {
+                return i;
+            }
+        }
+        throw new IllegalArgumentException("Timestamp is not a multiple of any slice");
+    }
+
     static <V> int binarySearch(List<? extends V> elements, Timestamper<? super V> timestamper, long ts, boolean firstIfTied) {
+        return binarySearch(elements, timestamper, ts, false, firstIfTied);
+    }
+
+    static <V> int binarySearchBack(List<? extends V> elements, Timestamper<? super V> timestamper, long ts, boolean firstIfTied) {
+        return binarySearch(elements, timestamper, ts, true, firstIfTied);
+    }
+
+    private static <V> int binarySearch(List<? extends V> elements, Timestamper<? super V> timestamper, long ts, boolean backwards, boolean firstIfTied) {
         int last = elements.size() - 1;
         int low = 0;
         int high = last;
@@ -205,26 +384,13 @@ public class TimestampedCache<K, V, P> {
                     }
                 }
                 return mid;
-            } else if (ts < midTs) {
+            } else if (backwards == ts > midTs) {
                 high = mid - 1;
             } else {
                 low = mid + 1;
             }
         }
         return -low - 1;
-    }
-
-    private int minSliceLevel(long timestamp) {
-        for (int i = 0, l = slices.length; i < l; i++) {
-            if (timestamp % slices[i] == 0) {
-                return i;
-            }
-        }
-        throw new IllegalArgumentException("Timestamp is not a multiple of any slice");
-    }
-
-    public Iterator<V> getBackwards(K key, long startTimestamp, P param) {
-        throw new UnsupportedOperationException("TODO");
     }
 
     /**
@@ -280,6 +446,10 @@ public class TimestampedCache<K, V, P> {
 
         public PeekingIterator<V> iterator() {
             return Iterators.peekingIterator(data.iterator());
+        }
+
+        public PeekingIterator<V> backIterator() {
+            return Iterators.peekingIterator(Lists.reverse(data).iterator());
         }
     }
 
