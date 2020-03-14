@@ -68,7 +68,11 @@ public class TimestampedCache<K, V, P> {
                     nextTimestamp = (lowestTimestamp / slice) * slice;
                     curChunk = getChunkFwd(key, nextTimestamp, 0, param);
                     if (nextTimestamp + slices[curChunk.sliceLevel] >= lowestTimestamp) {
-                        nextTimestamp += slice;
+                        if (curChunk.hasNextChunk()) {
+                            nextChunkSeq = 1;
+                        } else {
+                            nextTimestamp += slices[curChunk.sliceLevel];
+                        }
                         curChunkIterator = curChunk.iterator();
                         return;
                     }
