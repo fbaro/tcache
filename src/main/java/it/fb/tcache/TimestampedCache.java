@@ -167,14 +167,16 @@ public class TimestampedCache<K, V, P> {
             int l = slices.length;
             for (int s = l - 1; s >= minSliceLevel(endTs); s--) {
                 long startTs = endTs - slices[s];
-                Key<K> k = new Key<>(key, startTs, 0);
-                @Nullable Chunk<V> chunk = cache.getIfPresent(k);
+                int cs = 0;
+                @Nullable Chunk<V> chunk;
+                do {
+                    Key<K> k = new Key<>(key, startTs, cs);
+                    chunk = cache.getIfPresent(k);
+                    cs++;
+                } while (chunk != null && chunk.complete && chunk.hasNextChunk());
                 if (chunk != null && chunk.complete) {
-                    if (chunk.hasNextChunk()) {
-                        throw new UnsupportedOperationException("TODO");
-                    }
                     if (chunk.sliceLevel == s) {
-                        return new GetBackResult<>(chunk, 0, 0);
+                        return new GetBackResult<>(chunk, cs - 1, 0);
                     }
                     // Ho trovato uno slicing piu' basso di quello che mi aspettavo
                     // Significa che lo slice che contiene i miei dati sarebbe a slicing piu' alto,
