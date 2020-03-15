@@ -7,6 +7,7 @@ import org.junit.Test;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Random;
 import java.util.stream.Collectors;
 
 import static org.junit.Assert.assertEquals;
@@ -49,7 +50,7 @@ public class TimestampedCacheTest {
                 .skip(offset)
                 .limit(limit)
                 .collect(Collectors.toList());
-        return new Loader.StdResult<>(ret, ret.size() < limit && highestExcluded >= data.get(data.size() - 1));
+        return new Loader.StdResult<>(ret, data.isEmpty() || (ret.size() < limit && highestExcluded >= data.get(data.size() - 1)));
     }
 
     private Loader.Result<Long> loadBkw(long lowestIncluded, long highestExcluded, int offset, int limit) {
@@ -59,7 +60,7 @@ public class TimestampedCacheTest {
                 .skip(offset)
                 .limit(limit)
                 .collect(Collectors.toList());
-        return new Loader.StdResult<>(ret, ret.size() < limit && lowestIncluded < data.get(data.size() - 1));
+        return new Loader.StdResult<>(ret, data.isEmpty() || (ret.size() < limit && lowestIncluded < data.get(data.size() - 1)));
     }
 
     private List<Long> getBkw(long lowestExcluded, long highestIncluded, int offset, int limit) {
@@ -174,26 +175,76 @@ public class TimestampedCacheTest {
         test(new long[]{5000, 1000, 100}, 4, 0, 2000);
     }
 
+    @Test
+    public void randomized() {
+        Random rnd = new Random(1);
+        for (double d = 1; d < 100; d++) {
+            List<Long> data0 = new ArrayList<>();
+            for (int i = 0; i < data.size(); i++) {
+                if (rnd.nextDouble() <= d / 100) {
+                    data0.add(data.get(i));
+                }
+            }
+            data.clear();
+            data.addAll(data0);
+
+            long[] chunks = {5000, 1000, 500};
+            for (int chunkSize = 2; chunkSize < 55; chunkSize++) {
+                for (int i = 0; i < 100; i++) {
+                    TimestampedCache<String, Long, Void> cache = new TimestampedCache<>(chunkSize, chunks, v -> v, loader);
+                    for (int j = 0; j < 20; j++) {
+                        long start = rnd.nextInt(5000);
+                        long end = rnd.nextInt(2000) + start;
+                        switch (rnd.nextInt(4)) {
+                            case 0:
+                                test(cache, start, end);
+                                break;
+                            case 1:
+                                back(cache, start, end);
+                                break;
+                            case 2:
+                                test(cache, start, end);
+                                back(cache, start, end);
+                            case 3:
+                                back(cache, start, end);
+                                test(cache, start, end);
+                                break;
+                        }
+                    }
+                }
+                for (long start = 0; start < 1500; start += 25) {
+                    for (long end = start + 100; end < start + 1250; end += 25) {
+                        test(chunks, chunkSize, start, end);
+                        back(chunks, chunkSize, start, end);
+                    }
+                }
+            }
+        }
+    }
 
     private void test(long[] chunks, int chunkSize, long start, long end) {
-        //System.out.println("Testing chunkSize = [" + chunkSize + "], start = [" + start + "], end = [" + end + "]");
         TimestampedCache<String, Long, Void> cache = new TimestampedCache<>(chunkSize, chunks, v -> v, loader);
+        test(cache, start, end);
+    }
+
+    private void test(TimestampedCache<String, Long, Void> cache, long start, long end) {
+        //System.out.println("Testing chunkSize = [" + cache.getChunkSize() + "], start = [" + start + "], end = [" + end + "]");
         List<Long> result = new ArrayList<>();
         cache.getForward("", start, end, null)
                 .forEachRemaining(result::add);
-        assertEquals("Error at chunk size " + chunkSize + " start = " + start + " end = " + end, loadFwd(start, end, 0, 1000).getData(), result);
+        assertEquals("Error at chunk size " + cache.getChunkSize() + " start = " + start + " end = " + end, loadFwd(start, end, 0, 1000).getData(), result);
     }
 
     private void back(long[] chunks, int chunkSize, long start, long end) {
-        //System.out.println("Testing chunkSize = [" + chunkSize + "], start = [" + start + "], end = [" + end + "]");
         TimestampedCache<String, Long, Void> cache = new TimestampedCache<>(chunkSize, chunks, v -> v, loader);
+        back(cache, start, end);
+    }
+
+    private void back(TimestampedCache<String, Long, Void> cache, long start, long end) {
+        //System.out.println("Testing chunkSize = [" + cache.getChunkSize() + "], start = [" + start + "], end = [" + end + "]");
         List<Long> result = new ArrayList<>();
-        try {
-            cache.getBackwards("", start, end, null)
-                    .forEachRemaining(result::add);
-        } catch (RuntimeException ex) {
-            throw new AssertionError("Error at chunk size " + chunkSize + " start = " + start + " end = " + end, ex);
-        }
-        assertEquals("Error at chunk size " + chunkSize + " start = " + start + " end = " + end, getBkw(start, end, 0, 1000), result);
+        cache.getBackwards("", start, end, null)
+                .forEachRemaining(result::add);
+        assertEquals("Error at chunk size " + cache.getChunkSize() + " start = " + start + " end = " + end, getBkw(start, end, 0, 1000), result);
     }
 }

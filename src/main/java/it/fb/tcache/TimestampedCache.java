@@ -32,6 +32,7 @@ public class TimestampedCache<K, V, P> {
      * Per i dati a slicing massimo, i sequenziali dei chunk sono tutti negativi, con -1 ad indicare
      * il chunk piu' vicino al timestamp di fine dello slice.
      * TODO: Integrare (o piu' probabilmente svuotare) il contenuto di questa cache quando si fanno ricerche all'avanti
+     * TODO: Unire questa cache all'altra, distinguendo le chiavi
      */
     private final Cache<Key<K>, Chunk<V>> pCache = Caffeine.newBuilder().build();
     private final Loader<? super K, ? extends V, ? super P> loader;
@@ -42,6 +43,10 @@ public class TimestampedCache<K, V, P> {
         this.slices = slices;
         this.timestamper = timestamper;
         this.loader = loader;
+    }
+
+    public int getChunkSize() {
+        return chunkSize;
     }
 
     /**
@@ -209,13 +214,13 @@ public class TimestampedCache<K, V, P> {
                 lResult.addAll(chunk.data);
             }
             long resultEndTs = appendForward(key, param, lResult);
-            arrangeFwd(key, timestamp, -1, resultEndTs, ImmutableList.copyOf(lResult));
+            arrangeFwd(key, timestamp, resultEndTs, ImmutableList.copyOf(lResult));
             return cache.getIfPresent(k); // TODO: Problematico in concorrenza
         }
         Loader.Result<? extends V> result = loader.loadForward(key, timestamp, timestamp + slices[0], 0, chunkSize + 1, param);
         List<V> lResult = ImmutableList.copyOf(result.getData());
         long resultEndTs = result.getData().size() == chunkSize + 1 ? timestamper.getTs(lResult.get(lResult.size() - 1)) : timestamp + slices[0];
-        return arrangeFwd(key, timestamp, -1, resultEndTs, lResult);
+        return arrangeFwd(key, timestamp, resultEndTs, lResult);
     }
 
     /**
@@ -271,7 +276,7 @@ public class TimestampedCache<K, V, P> {
         for (int i = -1; i > chunkSeq; i--) {
             GetBackResult<V> chunkBack = getChunkBack(key, endTs, i, param);
             if (chunkBack.chunkSeq != i) {
-                throw new UnsupportedOperationException("TODO");
+                throw new IllegalStateException("Unexpected"); // TODO: Problema di concorrenza?
             }
             chunkUnion.addAll(chunkBack.chunk.data);
         }
@@ -327,21 +332,17 @@ public class TimestampedCache<K, V, P> {
      *
      * @param key                La chiave dei dati
      * @param timestamp          Il timestamp da cui i dati iniziano
-     * @param chunkSeq           La chunk sequence da cui i dati iniziano. Se non si ha la certezza di dover aggiungere dati
-     *                           ad un chunk di slicing massimo, mettere -1.
      * @param resultEndTimestamp Indica che tra il timestamp dell'ultimo dato e questo timestamp (escluso) non ci sono altri dati.
      *                           Puo' essere minore o uguale al timestamp dell'ultimo dato, e in questo caso non indica nulla.
      * @param result             I dati da inserire in cache
      * @return Il chunk associato a (timestamp, chunkSeq)
      */
-    private Chunk<V> arrangeFwd(K key, long timestamp, int chunkSeq, long resultEndTimestamp, List<V> result) {
+    private Chunk<V> arrangeFwd(K key, long timestamp, long resultEndTimestamp, List<V> result) {
         Chunk<V> ret = null;
         int l = slices.length;
+        int chunkSeq = -1;
 
         if (result.isEmpty()) {
-            if (chunkSeq > 0) {
-                throw new IllegalStateException("Did not expect this");
-            }
             int s = minSliceLevel(timestamp);
             Chunk<V> chunk = new Chunk<>(ImmutableList.of(), s, true, false, false, false, false);
             cache.put(new Key<>(key, timestamp, 0), chunk);
@@ -407,6 +408,13 @@ public class TimestampedCache<K, V, P> {
     private GetBackResult<V> arrangeBack(K key, long endTs, long resultStartTimestamp, List<V> result) {
         GetBackResult<V> ret = null;
         int l = slices.length;
+
+        if (result.isEmpty()) {
+            int s = minSliceLevel(endTs);
+            Chunk<V> chunk = new Chunk<>(ImmutableList.of(), s, true, false, false, false, false);
+            cache.put(new Key<>(key, endTs - slices[s], 0), chunk);
+            return new GetBackResult<>(chunk, 0, 0);
+        }
 
         outer:
         while (!result.isEmpty()) {
