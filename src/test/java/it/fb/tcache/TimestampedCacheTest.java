@@ -99,6 +99,7 @@ public class TimestampedCacheTest {
             for (long start = 0; start < 1000; start += 25) {
                 for (long end = start + 100; end < start + 500; end += 25) {
                     test(chunks, chunkSize, start, end);
+                    back(chunks, chunkSize, start, end);
                 }
             }
         }
@@ -112,6 +113,7 @@ public class TimestampedCacheTest {
             for (long start = 0; start < 1500; start += 25) {
                 for (long end = start + 100; end < start + 1250; end += 25) {
                     test(chunks, chunkSize, start, end);
+                    back(chunks, chunkSize, start, end);
                 }
             }
         }
@@ -125,6 +127,7 @@ public class TimestampedCacheTest {
             for (long start = 0; start < 1500; start += 25) {
                 for (long end = start + 100; end < start + 1250; end += 25) {
                     test(chunks, chunkSize, start, end);
+                    back(chunks, chunkSize, start, end);
                 }
             }
         }
@@ -138,6 +141,7 @@ public class TimestampedCacheTest {
             for (long start = 0; start < 1500; start += 25) {
                 for (long end = start + 100; end < start + 1250; end += 25) {
                     test(chunks, chunkSize, start, end);
+                    back(chunks, chunkSize, start, end);
                 }
             }
         }
@@ -157,6 +161,7 @@ public class TimestampedCacheTest {
             for (long start = 0; start < 1500; start += 25) {
                 for (long end = start + 100; end < start + 1250; end += 25) {
                     test(chunks, chunkSize, start, end);
+                    back(chunks, chunkSize, start, end);
                 }
             }
         }
@@ -169,30 +174,6 @@ public class TimestampedCacheTest {
         test(new long[]{5000, 1000, 100}, 4, 0, 2000);
     }
 
-    @Test
-    public void verifyBackwardsWithoutChunking() {
-        long[] chunks = {4000, 2000, 1000, 200};
-        for (int chunkSize = 2; chunkSize < 55; chunkSize++) {
-            for (long start = 0; start < 1000; start += 25) {
-                for (long end = start + 100; end < start + 500; end += 25) {
-                    back(chunks, chunkSize, start, end);
-                }
-            }
-        }
-    }
-
-    @Test
-    public void verifyBackwardsWithChunking() {
-        long[] chunks = {4000, 2000, 1000};
-        test(chunks, 9, 775, 2000);
-        for (int chunkSize = 4; chunkSize < 55; chunkSize++) {
-            for (long start = 0; start < 1500; start += 25) {
-                for (long end = start + 100; end < start + 1250; end += 25) {
-                    back(chunks, chunkSize, start, end);
-                }
-            }
-        }
-    }
 
     private void test(long[] chunks, int chunkSize, long start, long end) {
         //System.out.println("Testing chunkSize = [" + chunkSize + "], start = [" + start + "], end = [" + end + "]");

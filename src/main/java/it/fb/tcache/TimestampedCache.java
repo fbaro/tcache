@@ -120,6 +120,76 @@ public class TimestampedCache<K, V, P> {
         };
     }
 
+    /**
+     * Retrieves data backwards from the cache belonging to the specified key, starting
+     * from {@code highestTimestamp} and going back to {@code lowestTimestamp}.
+     *
+     * @param key              The key
+     * @param lowestTimestamp  The beginning timestamp (excluded)
+     * @param highestTimestamp The ending timestamp (included)
+     * @param param            The parameter to pass to the cache loader, if necessary
+     * @return An iterator on the results
+     */
+    public Iterator<V> getBackwards(K key, long lowestTimestamp, long highestTimestamp, P param) {
+        return new AbstractIterator<V>() {
+
+            private long nextEndTimestamp;
+            private int nextChunkSeq;
+            private GetBackResult<V> curChunk = null;
+            private PeekingIterator<V> curChunkIterator;
+
+            private void init() {
+                for (long slice : slices) {
+                    nextEndTimestamp = slice + (highestTimestamp / slice) * slice;
+                    curChunk = getChunkBack(key, nextEndTimestamp, LAST, param);
+                    if (nextEndTimestamp - slices[curChunk.chunk.sliceLevel] <= highestTimestamp) {
+                        initChunk();
+                        return;
+                    }
+                }
+                throw new IllegalStateException("Should not be reachable");
+            }
+
+            private void initChunk() {
+                curChunkIterator = curChunk.chunk.backIterator();
+                if (curChunk.hasPrevChunk()) {
+                    nextChunkSeq = curChunk.chunkSeq - 1;
+                } else {
+                    nextEndTimestamp -= slices[curChunk.chunk.sliceLevel];
+                    nextChunkSeq = LAST;
+                }
+                for (int i = 0; i < curChunk.toSkip; i++) {
+                    curChunkIterator.next();
+                }
+            }
+
+            @Override
+            protected V computeNext() {
+                if (curChunk == null) {
+                    init();
+                }
+                while (true) {
+                    while (curChunkIterator.hasNext()) {
+                        V ret = curChunkIterator.next();
+                        long retTs = timestamper.getTs(ret);
+                        if (retTs <= lowestTimestamp) {
+                            return endOfData();
+                        } else if (retTs <= highestTimestamp) {
+                            return ret;
+                        }
+                    }
+
+                    if (nextEndTimestamp <= lowestTimestamp) {
+                        return endOfData();
+                    }
+
+                    curChunk = getChunkBack(key, nextEndTimestamp, nextChunkSeq, param);
+                    initChunk();
+                }
+            }
+        };
+    }
+
     private Chunk<V> getChunkFwd(K key, long timestamp, int chunkSeq, P param) {
         Key<K> k = new Key<>(key, timestamp, chunkSeq);
         @Nullable Chunk<V> chunk = cache.getIfPresent(k);
@@ -399,82 +469,6 @@ public class TimestampedCache<K, V, P> {
         }
 
         return Preconditions.checkNotNull(ret);
-    }
-
-    /**
-     * Retrieves data backwards from the cache belonging to the specified key, starting
-     * from {@code highestTimestamp} and going back to {@code lowestTimestamp}.
-     *
-     * @param key              The key
-     * @param lowestTimestamp  The beginning timestamp (excluded)
-     * @param highestTimestamp The ending timestamp (included)
-     * @param param            The parameter to pass to the cache loader, if necessary
-     * @return An iterator on the results
-     */
-    public Iterator<V> getBackwards(K key, long lowestTimestamp, long highestTimestamp, P param) {
-        return new AbstractIterator<V>() {
-
-            private long nextEndTimestamp;
-            private int nextChunkSeq;
-            private GetBackResult<V> curChunk = null;
-            private PeekingIterator<V> curChunkIterator;
-
-            private void init() {
-                for (long slice : slices) {
-                    nextEndTimestamp = slice + (highestTimestamp / slice) * slice;
-                    curChunk = getChunkBack(key, nextEndTimestamp, LAST, param);
-                    if (nextEndTimestamp - slices[curChunk.chunk.sliceLevel] <= highestTimestamp) {
-                        curChunkIterator = curChunk.chunk.backIterator();
-                        if (curChunk.hasPrevChunk()) {
-                            nextChunkSeq = curChunk.chunkSeq - 1;
-                        } else {
-                            nextEndTimestamp -= slices[curChunk.chunk.sliceLevel];
-                            nextChunkSeq = LAST;
-                        }
-                        for (int i = 0; i < curChunk.toSkip; i++) {
-                            curChunkIterator.next();
-                        }
-                        return;
-                    }
-                }
-                throw new IllegalStateException("Should not be reachable");
-            }
-
-            @Override
-            protected V computeNext() {
-                if (curChunk == null) {
-                    init();
-                }
-                // TODO: Gestire chunking
-                while (true) {
-                    while (curChunkIterator.hasNext()) {
-                        V ret = curChunkIterator.next();
-                        long retTs = timestamper.getTs(ret);
-                        if (retTs <= lowestTimestamp) {
-                            return endOfData();
-                        } else if (retTs <= highestTimestamp) {
-                            return ret;
-                        }
-                    }
-
-                    if (nextEndTimestamp <= lowestTimestamp) {
-                        return endOfData();
-                    }
-
-                    curChunk = getChunkBack(key, nextEndTimestamp, nextChunkSeq, param);
-                    curChunkIterator = curChunk.chunk.backIterator();
-                    if (curChunk.hasPrevChunk()) {
-                        nextChunkSeq = curChunk.chunkSeq - 1;
-                    } else {
-                        nextEndTimestamp -= slices[curChunk.chunk.sliceLevel];
-                        nextChunkSeq = LAST;
-                    }
-                    for (int i = 0; i < curChunk.toSkip; i++) {
-                        curChunkIterator.next();
-                    }
-                }
-            }
-        };
     }
 
     private int minSliceLevel(long timestamp) {
