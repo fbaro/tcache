@@ -2,6 +2,7 @@ package it.fb.tcache;
 
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
@@ -71,7 +72,7 @@ public class TimestampedCache<K, V, P> {
                 // Nella ricerca del primo non devo riempire linearmente la cache,
                 // ma posso "saltare" pezzi per arrivare in fretta al punto richiesto dall'utente
                 for (long slice : slices) {
-                    nextTimestamp = (lowestTimestamp / slice) * slice;
+                    nextTimestamp = roundDown (lowestTimestamp, slice);
                     curChunk = getChunkFwd(key, nextTimestamp, 0, param);
                     if (nextTimestamp + slices[curChunk.sliceLevel] >= lowestTimestamp) {
                         if (curChunk.hasNextChunk()) {
@@ -145,7 +146,7 @@ public class TimestampedCache<K, V, P> {
 
             private void init() {
                 for (long slice : slices) {
-                    nextEndTimestamp = slice + (highestTimestamp / slice) * slice;
+                    nextEndTimestamp = slice + roundDown (highestTimestamp, slice);
                     curChunk = getChunkBack(key, nextEndTimestamp, LAST, param);
                     if (nextEndTimestamp - slices[curChunk.chunk.sliceLevel] <= highestTimestamp) {
                         initChunk();
@@ -486,6 +487,16 @@ public class TimestampedCache<K, V, P> {
             }
         }
         throw new IllegalArgumentException("Timestamp is not a multiple of any slice");
+    }
+
+    @VisibleForTesting
+    static long roundDown(long value, long rounding) {
+        long remainder = value % rounding;
+        if (remainder < 0) {
+            return value - remainder - rounding;
+        } else {
+            return value - remainder;
+        }
     }
 
     static <V> int binarySearch(List<? extends V> elements, Timestamper<? super V> timestamper, long ts, boolean firstIfTied) {

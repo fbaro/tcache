@@ -2,6 +2,7 @@ package it.fb.tcache;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
+import org.junit.Ignore;
 import org.junit.Test;
 
 import java.util.ArrayList;
@@ -70,6 +71,15 @@ public class TimestampedCacheTest {
                 .skip(offset)
                 .limit(limit)
                 .collect(Collectors.toList());
+    }
+
+    @Test
+    public void verifyRoundDown() {
+        assertEquals(0L, TimestampedCache.roundDown(0, 200));
+        assertEquals(0L, TimestampedCache.roundDown(123, 200));
+        assertEquals(200L, TimestampedCache.roundDown(200, 200));
+        assertEquals(-200L, TimestampedCache.roundDown(-123, 200));
+        assertEquals(-200L, TimestampedCache.roundDown(-200, 200));
     }
 
     @Test
@@ -176,9 +186,12 @@ public class TimestampedCacheTest {
     }
 
     @Test
+    @Ignore
     public void randomized() {
-        Random rnd = new Random(1);
-        for (double d = 1; d < 100; d++) {
+        for (double d = 1; d < 100; d += .1) {
+            long seed = System.currentTimeMillis();
+            System.out.println(seed);
+            Random rnd = new Random(seed);
             List<Long> data0 = new ArrayList<>();
             for (int i = 0; i < data.size(); i++) {
                 if (rnd.nextDouble() <= d / 100) {
@@ -193,7 +206,7 @@ public class TimestampedCacheTest {
                 for (int i = 0; i < 100; i++) {
                     TimestampedCache<String, Long, Void> cache = new TimestampedCache<>(chunkSize, chunks, v -> v, loader);
                     for (int j = 0; j < 20; j++) {
-                        long start = rnd.nextInt(5000);
+                        long start = rnd.nextInt(5500) - 250;
                         long end = rnd.nextInt(2000) + start;
                         switch (rnd.nextInt(4)) {
                             case 0:
