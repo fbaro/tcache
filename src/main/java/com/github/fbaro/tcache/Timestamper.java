@@ -1,4 +1,4 @@
-package it.fb.tcache;
+package com.github.fbaro.tcache;
 
 @FunctionalInterface
 public interface Timestamper<V> {

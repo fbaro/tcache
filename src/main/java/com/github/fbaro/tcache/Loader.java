@@ -1,4 +1,4 @@
-package it.fb.tcache;
+package com.github.fbaro.tcache;
 
 import java.util.Collection;
 

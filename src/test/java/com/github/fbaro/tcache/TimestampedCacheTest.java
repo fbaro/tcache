@@ -1,4 +1,4 @@
-package it.fb.tcache;
+package com.github.fbaro.tcache;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
