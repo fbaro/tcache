@@ -2,7 +2,7 @@ plugins {
     id 'java-library'
 }
 
-group 'it.fb'
+group 'com.github.fbaro'
 version '1.0-SNAPSHOT'
 
 sourceCompatibility = 1.8
