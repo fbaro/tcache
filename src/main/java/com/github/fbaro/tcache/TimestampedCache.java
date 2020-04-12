@@ -34,19 +34,14 @@ public class TimestampedCache<K, V, P> {
     private final int chunkSize;
     private final long[] slices;
     /**
-     * Contiene i dati standard, con tutto l'algoritmo di slicing/chunking
-     */
-    private final Cache<Key<K>, Chunk<V>> cache;
-    /**
-     * Cache "temporanea" dei dati recuperati all'indietro, ma che non completano uno slice
-     * e dei quali quindi non e' possibile determinare la corretta posizione nella cache primaria.
-     * I chunk in questa cache hanno in chiave il timestamp di fine, ed i dati ordinati per timestamp decrescente.
+     * Contiene i dati standard ascendenti, necessari per l'algoritmo di slicing/chunking, ed i dati temporanei
+     * discendenti,
+     * I chunk discendenti hanno in chiave il timestamp di fine, ed i dati ordinati per timestamp decrescente.
      * Per i dati a slicing massimo, i sequenziali dei chunk sono tutti negativi, con -1 ad indicare
      * il chunk piu' vicino al timestamp di fine dello slice.
-     * TODO: Integrare (o piu' probabilmente svuotare) il contenuto di questa cache quando si fanno ricerche all'avanti
-     * TODO: Unire questa cache all'altra, distinguendo le chiavi
+     * TODO: Integrare (o piu' probabilmente svuotare) i dati discendenti quando si fanno ricerche all'avanti
      */
-    private final Cache<Key<K>, Chunk<V>> pCache;
+    private final Cache<Key<K>, Chunk<V>> cache;
     private final Loader<? super K, ? extends V, ? super P> loader;
     private final ToLongFunction<? super V> timestamper;
 
@@ -70,7 +65,6 @@ public class TimestampedCache<K, V, P> {
         this.timestamper = timestamper;
         this.loader = loader;
         this.cache = caffeineBuilder.build();
-        this.pCache = caffeineBuilder.build();
         for (int i = 1; i < slices.length; i++) {
             if (slices[i - 1] <= slices[i] || slices[i - 1] % slices[i] != 0) {
                 throw new IllegalArgumentException("The slices should be sorted in descending order, and smaller slices should evenly divide greater slices");
@@ -250,11 +244,10 @@ public class TimestampedCache<K, V, P> {
      */
     public void invalidateAll() {
         cache.invalidateAll();
-        pCache.invalidateAll();
     }
 
     private Chunk<V> getChunkFwd(K key, long timestamp, int chunkSeq, P param) {
-        Key<K> k = new Key<>(key, timestamp, chunkSeq);
+        Key<K> k = Key.asc(key, timestamp, chunkSeq);
         @Nullable Chunk<V> chunk = cache.getIfPresent(k);
         if (chunk != null && chunk.complete) {
             return chunk;
@@ -303,7 +296,7 @@ public class TimestampedCache<K, V, P> {
                 int cs = 0;
                 @Nullable Chunk<V> chunk;
                 do {
-                    Key<K> k = new Key<>(key, startTs, cs);
+                    Key<K> k = Key.asc(key, startTs, cs);
                     chunk = cache.getIfPresent(k);
                     cs++;
                 } while (chunk != null && chunk.complete && chunk.hasNextChunk());
@@ -322,8 +315,8 @@ public class TimestampedCache<K, V, P> {
 
         // A questo punto i dati non sono nella cache standard
         // Cerco nella cache dei parziali all'indietro
-        Key<K> pKey = new Key<>(key, endTs, chunkSeq);
-        Chunk<V> pChunk = pCache.getIfPresent(pKey);
+        Key<K> pKey = Key.desc(key, endTs, chunkSeq);
+        Chunk<V> pChunk = cache.getIfPresent(pKey);
         if (pChunk != null && pChunk.complete) {
             return new GetBackResult<>(pChunk, chunkSeq, 0);
         }
@@ -359,7 +352,7 @@ public class TimestampedCache<K, V, P> {
             long resultStartTs = result.getData().size() == chunkSize + 1 ? timestamper.applyAsLong(chunkUnion.get(chunkUnion.size() - 1)) : endTs - slices[0];
             GetBackResult<V> arranged = arrangeBack(key, endTs, resultStartTs, ImmutableList.copyOf(chunkUnion));
             if (arranged.chunk.inverted) {
-                return new GetBackResult<>(pCache.getIfPresent(pKey), chunkSeq, 0); // TODO: Problemi di concorrenza sulla getIfPresent?
+                return new GetBackResult<>(cache.getIfPresent(pKey), chunkSeq, 0); // TODO: Problemi di concorrenza sulla getIfPresent?
             } else {
                 // Ho raddrizzato i dati
                 // Quindi in pCache non trovo quello che volevo, devo andare sulla cache normale
@@ -403,7 +396,7 @@ public class TimestampedCache<K, V, P> {
         if (result.isEmpty()) {
             int s = minSliceLevel(timestamp);
             Chunk<V> chunk = new Chunk<>(ImmutableList.of(), s, true, false, false, false, false);
-            cache.put(new Key<>(key, timestamp, 0), chunk);
+            cache.put(Key.asc(key, timestamp, 0), chunk);
             return chunk;
         }
 
@@ -418,7 +411,7 @@ public class TimestampedCache<K, V, P> {
 
                 boolean complete = chunkEnd < result.size() || endTimestamp <= resultEndTimestamp;
                 Chunk<V> chunk = new Chunk<>(result.subList(0, chunkEnd), l - 1, complete, position > chunkSize, false, false, false);
-                cache.put(new Key<>(key, timestamp, chunkSeq), chunk);
+                cache.put(Key.asc(key, timestamp, chunkSeq), chunk);
                 result = result.subList(chunkEnd, result.size());
                 ret = (ret == null ? chunk : ret);
                 chunkSeq = (chunk.hasNextChunk ? chunkSeq + 1 : -1);
@@ -437,7 +430,7 @@ public class TimestampedCache<K, V, P> {
                         // o se so che non ci sono altri dati oltre endTimestamp
                         boolean complete = chunkEnd < result.size() || endTimestamp <= resultEndTimestamp;
                         Chunk<V> chunk = new Chunk<>(result.subList(0, chunkEnd), s, complete, false, false, false, false);
-                        cache.put(new Key<>(key, timestamp, 0), chunk);
+                        cache.put(Key.asc(key, timestamp, 0), chunk);
                         result = result.subList(chunkEnd, result.size());
                         ret = (ret == null ? chunk : ret);
                         chunkSeq = -1;
@@ -470,7 +463,7 @@ public class TimestampedCache<K, V, P> {
         if (result.isEmpty()) {
             int s = minSliceLevel(endTs);
             Chunk<V> chunk = new Chunk<>(ImmutableList.of(), s, true, false, false, false, false);
-            cache.put(new Key<>(key, endTs - slices[s], 0), chunk);
+            cache.put(Key.asc(key, endTs - slices[s], 0), chunk);
             return new GetBackResult<>(chunk, 0, 0);
         }
 
@@ -491,11 +484,11 @@ public class TimestampedCache<K, V, P> {
                     if (complete) {
                         Chunk<V> chunk = new Chunk<>(Lists.reverse(result.subList(0, sliceEnd)), s, true, false, false, false, false);
                         // TODO: Svuotare la pCache? Come?
-                        cache.put(new Key<>(key, startTs, 0), chunk);
+                        cache.put(Key.asc(key, startTs, 0), chunk);
                         ret = (ret == null ? new GetBackResult<>(chunk, 0, 0) : ret);
                     } else {
                         Chunk<V> chunk = new Chunk<>(result.subList(0, sliceEnd), s, false, false, false, false, true);
-                        pCache.put(new Key<>(key, endTs, 0), chunk);
+                        cache.put(Key.desc(key, endTs, 0), chunk);
                         ret = (ret == null ? new GetBackResult<>(chunk, 0, 0) : ret);
                     }
                     result = result.subList(sliceEnd, result.size());
@@ -513,7 +506,7 @@ public class TimestampedCache<K, V, P> {
                             int endIdx = Math.min((i + 1) * chunkSize, sliceEnd);
                             // Lo slice e' completo: metto tutti i chunk nella cache standard
                             Chunk<V> chunk = new Chunk<>(sliceData.subList(startIdx, endIdx), s, true, i < numChunks - 1, false, false, false);
-                            cache.put(new Key<>(key, startTs, i), chunk);
+                            cache.put(Key.asc(key, startTs, i), chunk);
                             ret = (ret == null ? new GetBackResult<>(chunk, i, 0) : ret);
                         }
                         // TODO: Svuotare la pCache? Come?
@@ -523,7 +516,7 @@ public class TimestampedCache<K, V, P> {
                             int endIdx = Math.min((i + 1) * chunkSize, sliceEnd);
                             // Lo slice e' incompleto: metto tutti i chunk nella cache prev, non raddrizzati e con i sequenziali negativi
                             Chunk<V> chunk = new Chunk<>(result.subList(startIdx, endIdx), s, i < numChunks - 1, i < numChunks - 1, false, false, true);
-                            pCache.put(new Key<>(key, endTs, -i - 1), chunk);
+                            cache.put(Key.desc(key, endTs, -i - 1), chunk);
                             ret = (ret == null ? new GetBackResult<>(chunk, -i - 1, 0) : ret);
                         }
                     }
@@ -681,11 +674,13 @@ public class TimestampedCache<K, V, P> {
     }
 
     private static final class Key<K> {
+        private final boolean ascending;
         private final K key;
         private final long ts;
         private final int chunkSeq;
 
-        Key(K key, long ts, int chunkSeq) {
+        Key(boolean ascending, K key, long ts, int chunkSeq) {
+            this.ascending = ascending;
             this.key = key;
             this.ts = ts;
             this.chunkSeq = chunkSeq;
@@ -696,23 +691,33 @@ public class TimestampedCache<K, V, P> {
             if (this == o) return true;
             if (o == null || getClass() != o.getClass()) return false;
             Key<?> key1 = (Key<?>) o;
-            return ts == key1.ts &&
+            return ascending == key1.ascending &&
+                    ts == key1.ts &&
                     chunkSeq == key1.chunkSeq &&
                     Objects.equals(key, key1.key);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(key, ts, chunkSeq);
+            return Objects.hash(ascending, key, ts, chunkSeq);
         }
 
         @Override
         public String toString() {
             return "Key{" +
-                    "key=" + key +
+                    "ascending=" + ascending +
+                    ", key=" + key +
                     ", ts=" + ts +
                     ", chunkSeq=" + chunkSeq +
                     '}';
+        }
+
+        public static <K> Key<K> asc(K key, long ts, int chunkSeq) {
+            return new Key<>(true, key, ts, chunkSeq);
+        }
+
+        public static <K> Key<K> desc(K key, long ts, int chunkSeq) {
+            return new Key<>(false, key, ts, chunkSeq);
         }
     }
 }
