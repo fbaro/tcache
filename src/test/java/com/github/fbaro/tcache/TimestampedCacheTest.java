@@ -2,8 +2,8 @@ package com.github.fbaro.tcache;
 
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
-import org.junit.Ignore;
 import org.junit.Test;
+import org.junit.experimental.categories.Category;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -120,7 +120,7 @@ public class TimestampedCacheTest {
     public void verifyWithChunking() {
         long[] chunks = {4000, 2000, 1000};
         test(chunks, 4, 0, 425);
-        for (int chunkSize = 4; chunkSize < 55; chunkSize++) {
+        for (int chunkSize = 10; chunkSize < 55; chunkSize++) {
             for (long start = 0; start < 1500; start += 25) {
                 for (long end = start + 100; end < start + 1250; end += 25) {
                     test(chunks, chunkSize, start, end);
@@ -186,7 +186,7 @@ public class TimestampedCacheTest {
     }
 
     @Test
-    @Ignore
+    @Category(SlowTests.class)
     public void randomized() {
         for (double d = 1; d < 100; d += .1) {
             long seed = System.currentTimeMillis();

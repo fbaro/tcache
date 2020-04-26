@@ -16,3 +16,18 @@ dependencies {
     implementation 'com.google.guava:guava:28.2-jre'
     testCompile group: 'junit', name: 'junit', version: '4.12'
 }
+
+test {
+    useJUnit {
+        excludeCategories 'com.github.fbaro.tcache.SlowTests'
+    }
+}
+
+task slowTest(type: Test) {
+    description = 'Runs slow tests.'
+    group = 'verification'
+
+    testClassesDirs = sourceSets.test.output.classesDirs
+    classpath = sourceSets.test.runtimeClasspath
+    shouldRunAfter test
+}
