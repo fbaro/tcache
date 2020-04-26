@@ -119,8 +119,10 @@ public class TimestampedCacheTest {
     @Test
     public void verifyWithChunking() {
         long[] chunks = {4000, 2000, 1000};
-        test(chunks, 4, 0, 425);
-        for (int chunkSize = 10; chunkSize < 55; chunkSize++) {
+        test(chunks, 4, 0, 425); // If a specific combination fails, test it here
+        back(chunks, 6, 0, 1000);
+
+        for (int chunkSize = 4; chunkSize < 55; chunkSize++) {
             for (long start = 0; start < 1500; start += 25) {
                 for (long end = start + 100; end < start + 1250; end += 25) {
                     test(chunks, chunkSize, start, end);
