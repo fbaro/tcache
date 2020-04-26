@@ -265,13 +265,12 @@ public class TimestampedCache<K, V, P> {
                 lResult.addAll(chunk.data);
             }
             long resultEndTs = appendForward(key, param, lResult);
-            arrangeFwd(key, timestamp, resultEndTs, ImmutableList.copyOf(lResult));
-            return cache.getIfPresent(k); // TODO: Problematico in concorrenza
+            return arrangeFwd(key, timestamp, chunkSeq, resultEndTs, ImmutableList.copyOf(lResult));
         }
         Loader.Result<? extends V> result = loader.loadForward(key, timestamp, timestamp + slices[0], 0, chunkSize + 1, param);
         List<V> lResult = ImmutableList.copyOf(result.getData());
         long resultEndTs = result.getData().size() == chunkSize + 1 ? timestamper.applyAsLong(lResult.get(lResult.size() - 1)) : timestamp + slices[0];
-        return arrangeFwd(key, timestamp, resultEndTs, lResult);
+        return arrangeFwd(key, timestamp, 0, resultEndTs, lResult);
     }
 
     /**
@@ -383,23 +382,24 @@ public class TimestampedCache<K, V, P> {
      *
      * @param key                La chiave dei dati
      * @param timestamp          Il timestamp da cui i dati iniziano
+     * @param retChunkSeq        Il numero di chunk che si vuole venga restituito
      * @param resultEndTimestamp Indica che tra il timestamp dell'ultimo dato e questo timestamp (escluso) non ci sono altri dati.
      *                           Puo' essere minore o uguale al timestamp dell'ultimo dato, e in questo caso non indica nulla.
      * @param result             I dati da inserire in cache
      * @return Il chunk associato a (timestamp, chunkSeq)
      */
-    private Chunk<V> arrangeFwd(K key, long timestamp, long resultEndTimestamp, List<V> result) {
-        Chunk<V> ret = null;
-        int l = slices.length;
-        int chunkSeq = -1;
-
+    private Chunk<V> arrangeFwd(K key, long timestamp, int retChunkSeq, long resultEndTimestamp, List<V> result) {
         if (result.isEmpty()) {
+            Preconditions.checkState(retChunkSeq == 0);
             int s = minSliceLevel(timestamp);
-            Chunk<V> chunk = new Chunk<>(ImmutableList.of(), s, true, false, false, false, false);
+            Chunk<V> chunk = Chunk.empty(s, false, false);
             cache.put(Key.asc(key, timestamp, 0), chunk);
             return chunk;
         }
 
+        int chunkSeq = -1;
+        int l = slices.length;
+        Chunk<V> ret = null;
         outer:
         while (!result.isEmpty()) {
             if (chunkSeq >= 0) {
@@ -413,7 +413,7 @@ public class TimestampedCache<K, V, P> {
                 Chunk<V> chunk = new Chunk<>(result.subList(0, chunkEnd), l - 1, complete, position > chunkSize, false, false, false);
                 cache.put(Key.asc(key, timestamp, chunkSeq), chunk);
                 result = result.subList(chunkEnd, result.size());
-                ret = (ret == null ? chunk : ret);
+                ret = (ret == null && chunkSeq == retChunkSeq ? chunk : ret);
                 chunkSeq = (chunk.hasNextChunk ? chunkSeq + 1 : -1);
                 timestamp = (chunk.hasNextChunk ? timestamp : endTimestamp);
             } else {
@@ -432,7 +432,7 @@ public class TimestampedCache<K, V, P> {
                         Chunk<V> chunk = new Chunk<>(result.subList(0, chunkEnd), s, complete, false, false, false, false);
                         cache.put(Key.asc(key, timestamp, 0), chunk);
                         result = result.subList(chunkEnd, result.size());
-                        ret = (ret == null ? chunk : ret);
+                        ret = (ret == null && 0 == retChunkSeq ? chunk : ret);
                         chunkSeq = -1;
                         timestamp = endTimestamp;
                         continue outer;
@@ -443,7 +443,7 @@ public class TimestampedCache<K, V, P> {
             }
         }
 
-        return Preconditions.checkNotNull(ret);
+        return ret != null ?  ret : Chunk.empty(minSliceLevel(timestamp), false, false);
     }
 
     /**
