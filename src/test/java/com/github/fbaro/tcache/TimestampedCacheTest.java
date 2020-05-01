@@ -88,7 +88,7 @@ public class TimestampedCacheTest {
         for (long search = -1; search < 12; search++) {
             assertEquals(
                     Collections.binarySearch(data0, search),
-                    TimestampedCache.binarySearch(data0, v -> v, search, true));
+                    TimestampedCache.binarySearch(data0, v -> v, search));
         }
     }
 
@@ -96,10 +96,10 @@ public class TimestampedCacheTest {
     public void verifyCustomBinarySearchBackwardsWorks() {
         ImmutableList<Long> data0 = ImmutableList.of(10L, 8L, 6L, 4L, 2L);
         for (int i = 0; i < 5; i++) {
-            assertEquals(i, TimestampedCache.binarySearchBack(data0, v -> v, 10L - 2 * i, true));
+            assertEquals(i, TimestampedCache.binarySearchBack(data0, v -> v, 10L - 2 * i));
         }
         for (int i = -1; i >= -6; i--) {
-            assertEquals(i, TimestampedCache.binarySearchBack(data0, v -> v, 13L + 2 * i, true));
+            assertEquals(i, TimestampedCache.binarySearchBack(data0, v -> v, 13L + 2 * i));
         }
     }
 

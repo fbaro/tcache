@@ -300,7 +300,7 @@ public class TimestampedCache<K, V, P> {
                 lResult.addAll(chunk.data);
             }
             long lastTs = timestamper.applyAsLong(lResult.get(lResult.size() - 1));
-            int lastIdx = binarySearch(lResult, timestamper, lastTs, true);
+            int lastIdx = binarySearch(lResult, timestamper, lastTs);
             long highestExcluded = lastTs + slices[0];
             Loader.Result<? extends V> result = loader.loadForward(key, lastTs, highestExcluded, lResult.size() - lastIdx, chunkSize + 1, param);
             lResult.addAll(result.getData());
@@ -382,7 +382,7 @@ public class TimestampedCache<K, V, P> {
         } else {
             // Completo i dati parziali facendo un'altra load all'indietro
             long lastTs = timestamper.applyAsLong(chunkUnion.get(chunkUnion.size() - 1));
-            int lastTsFirstIdx = binarySearchBack(chunkUnion, timestamper, lastTs, true);
+            int lastTsFirstIdx = binarySearchBack(chunkUnion, timestamper, lastTs);
             long loadEndTs = (lastTsFirstIdx == 0 ? endTs : timestamper.applyAsLong(chunkUnion.get(lastTsFirstIdx - 1)));
             Loader.Result<? extends V> result = loader.loadBackwards(key, loadEndTs - slices[0], loadEndTs, chunkUnion.size() - lastTsFirstIdx, chunkSize + 1, param);
             chunkUnion.addAll(result.getData());
@@ -420,7 +420,7 @@ public class TimestampedCache<K, V, P> {
             if (chunkSeq >= 0) {
                 // So gia' che devo andare allo slicing massimo
                 long endTimestamp = timestamp + slices[l - 1];
-                int position = binarySearch(result, timestamper, endTimestamp, true);
+                int position = binarySearch(result, timestamper, endTimestamp);
                 position = (position >= 0 ? position : -position - 1);
                 int chunkEnd = Math.min(chunkSize, position);
 
@@ -435,7 +435,7 @@ public class TimestampedCache<K, V, P> {
                 int s = minSliceLevel(timestamp);
                 for (; s < l; s++) {
                     long endTimestamp = timestamp + slices[s];
-                    int chunkEnd = binarySearch(result, timestamper, endTimestamp, true);
+                    int chunkEnd = binarySearch(result, timestamper, endTimestamp);
                     chunkEnd = (chunkEnd >= 0 ? chunkEnd : -chunkEnd - 1);
                     if (chunkEnd <= chunkSize) {
                         // Ho trovato un livello di slicing che produce uno slice non oltre la massima dimensione
@@ -488,7 +488,7 @@ public class TimestampedCache<K, V, P> {
             int s = minSliceLevel(endTs);
             for (; s < l; s++) {
                 long startTs = endTs - slices[s];
-                int sliceEnd = binarySearchBack(result, timestamper, startTs, true);
+                int sliceEnd = binarySearchBack(result, timestamper, startTs);
                 sliceEnd = (sliceEnd >= 0 ? sliceEnd : -sliceEnd - 2) + 1; // L'estremo inferiore, se trovato, va incluso
                 if (sliceEnd <= chunkSize) {
                     // Ho trovato un livello di slicing che produce uno slice non oltre la massima dimensione
@@ -568,15 +568,15 @@ public class TimestampedCache<K, V, P> {
         }
     }
 
-    static <V> int binarySearch(List<? extends V> elements, ToLongFunction<? super V> timestamper, long ts, boolean firstIfTied) {
-        return binarySearch(elements, timestamper, ts, false, firstIfTied);
+    static <V> int binarySearch(List<? extends V> elements, ToLongFunction<? super V> timestamper, long ts) {
+        return binarySearch(elements, timestamper, ts, false);
     }
 
-    static <V> int binarySearchBack(List<? extends V> elements, ToLongFunction<? super V> timestamper, long ts, boolean firstIfTied) {
-        return binarySearch(elements, timestamper, ts, true, firstIfTied);
+    static <V> int binarySearchBack(List<? extends V> elements, ToLongFunction<? super V> timestamper, long ts) {
+        return binarySearch(elements, timestamper, ts, true);
     }
 
-    private static <V> int binarySearch(List<? extends V> elements, ToLongFunction<? super V> timestamper, long ts, boolean backwards, boolean firstIfTied) {
+    private static <V> int binarySearch(List<? extends V> elements, ToLongFunction<? super V> timestamper, long ts, boolean backwards) {
         int last = elements.size() - 1;
         int low = 0;
         int high = last;
@@ -584,14 +584,8 @@ public class TimestampedCache<K, V, P> {
             int mid = (low + high) / 2;
             long midTs = timestamper.applyAsLong(elements.get(mid));
             if (midTs == ts) {
-                if (firstIfTied) {
-                    while (mid > 0 && timestamper.applyAsLong(elements.get(mid - 1)) == ts) {
-                        --mid;
-                    }
-                } else {
-                    while (mid < last && timestamper.applyAsLong(elements.get(mid + 1)) == ts) {
-                        ++mid;
-                    }
+                while (mid > 0 && timestamper.applyAsLong(elements.get(mid - 1)) == ts) {
+                    --mid;
                 }
                 return mid;
             } else if (backwards == ts > midTs) {
