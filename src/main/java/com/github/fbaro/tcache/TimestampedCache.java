@@ -6,7 +6,6 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
-import com.google.common.collect.Iterators;
 import com.google.common.collect.Lists;
 import com.google.common.collect.PeekingIterator;
 
@@ -120,23 +119,18 @@ public class TimestampedCache<K, V, P> {
     public Iterator<V> getForward(K key, long lowestTimestamp, long highestTimestamp, P param) {
         return new AbstractIterator<V>() {
 
-            private long nextTimestamp;
-            private int nextChunkSeq = 0;
+            private long curTimestamp;
+            private int curChunkSeq = 0;
             private Chunk<V> curChunk = null;
-            private PeekingIterator<V> curChunkIterator = null;
+            private CountingIterator<V> curChunkIterator = null;
 
             private void init() {
                 // Nella ricerca del primo non devo riempire linearmente la cache,
                 // ma posso "saltare" pezzi per arrivare in fretta al punto richiesto dall'utente
                 for (long slice : slices) {
-                    nextTimestamp = roundDown(lowestTimestamp, slice);
-                    curChunk = getChunkFwd(key, nextTimestamp, 0, param);
-                    if (nextTimestamp + slices[curChunk.sliceLevel] >= lowestTimestamp) {
-                        if (curChunk.hasNextChunk()) {
-                            nextChunkSeq = 1;
-                        } else {
-                            nextTimestamp += slices[curChunk.sliceLevel];
-                        }
+                    curTimestamp = roundDown(lowestTimestamp, slice);
+                    curChunk = getChunkFwd(key, curTimestamp, 0, false, param);
+                    if (curTimestamp + slices[curChunk.sliceLevel] >= lowestTimestamp) {
                         curChunkIterator = curChunk.iterator();
                         return;
                     }
@@ -149,36 +143,52 @@ public class TimestampedCache<K, V, P> {
                 if (curChunk == null) {
                     init();
                 }
-                while (curChunkIterator.hasNext()) {
-                    V ret = curChunkIterator.next();
-                    long retTs = timestamper.applyAsLong(ret);
-                    if (retTs >= highestTimestamp) {
-                        return endOfData();
-                    } else if (retTs >= lowestTimestamp) {
-                        return ret;
-                    }
-                }
-                while (!curChunk.endOfDataForward && nextTimestamp < highestTimestamp) { // TODO: Posso anche terminare a meta' di un chunk
-                    // TODO: Non sarebbe male gestire qui anche i chunk parziali
-                    // TODO: in modo da sfruttare piu' possibile cio' che ho gia' caricato,
-                    // TODO: andando a richiedere dati al loader solo quando assolutamente necessario
-                    curChunk = getChunkFwd(key, nextTimestamp, nextChunkSeq, param);
-                    if (curChunk.hasNextChunk()) {
-                        nextChunkSeq++;
-                    } else {
-                        nextTimestamp = curChunk.getEndTimestamp(nextTimestamp, slices);
-                        nextChunkSeq = 0;
-                    }
-                    curChunkIterator = curChunk.iterator();
-
-                    while (curChunkIterator.hasNext() && timestamper.applyAsLong(curChunkIterator.peek()) < lowestTimestamp) {
-                        curChunkIterator.next();
-                    }
-                    if (curChunkIterator.hasNext() && timestamper.applyAsLong(curChunkIterator.peek()) < highestTimestamp) {
-                        return curChunkIterator.next();
+                for (; curChunkIterator.hasNext() || !curChunk.complete || (!curChunk.endOfDataForward && getNextTimestamp() < highestTimestamp); moveToNextChunk()) {
+                    for (; curChunkIterator.hasNext() || !curChunk.complete; completeChunk()) {
+                        while (curChunkIterator.hasNext()) {
+                            V ret = curChunkIterator.next();
+                            long retTs = timestamper.applyAsLong(ret);
+                            if (retTs >= highestTimestamp) {
+                                return endOfData();
+                            } else if (retTs >= lowestTimestamp) {
+                                return ret;
+                            }
+                        }
                     }
                 }
                 return endOfData();
+            }
+
+            private void completeChunk() {
+                if (!curChunk.complete) {
+                    int toSkip = curChunkIterator.getCount();
+                    curChunk = getChunkFwd(key, curTimestamp, curChunkSeq, true, param);
+                    curChunkIterator = curChunk.iterator();
+                    while (toSkip > 0) {
+                        curChunkIterator.next();
+                        toSkip--;
+                        if (toSkip > 0 && !curChunkIterator.hasNext()) {
+                            // Questo puo' succedere se il chunk incompleto era ad un livello di slicing,
+                            // ma quando ho cercato di completarlo lo slicing e' diventato piu' fine
+                            moveToNextChunk();
+                        }
+                    }
+                }
+            }
+
+            private void moveToNextChunk() {
+                if (curChunk.hasNextChunk()) {
+                    curChunkSeq++;
+                } else {
+                    curTimestamp = curChunk.getEndTimestamp(curTimestamp, slices);
+                    curChunkSeq = 0;
+                }
+                curChunk = getChunkFwd(key, curTimestamp, curChunkSeq, false, param);
+                curChunkIterator = curChunk.iterator();
+            }
+
+            private long getNextTimestamp() {
+                return !curChunk.complete || curChunk.hasNextChunk() ? curTimestamp : curChunk.getEndTimestamp(curTimestamp, slices);
             }
         };
     }
@@ -272,10 +282,10 @@ public class TimestampedCache<K, V, P> {
         cache.invalidateAll();
     }
 
-    private Chunk<V> getChunkFwd(K key, long timestamp, int chunkSeq, P param) {
+    private Chunk<V> getChunkFwd(K key, long timestamp, int chunkSeq, boolean mustBeComplete, P param) {
         Key<K> k = Key.asc(key, timestamp, chunkSeq);
         @Nullable Chunk<V> chunk = cache.getIfPresent(k);
-        if (chunk != null && chunk.complete) {
+        if (chunk != null && (chunk.complete || !mustBeComplete)) {
             return chunk;
         }
         if (chunk != null || chunkSeq > 0) {
@@ -285,7 +295,7 @@ public class TimestampedCache<K, V, P> {
             // Attenzione ai dati con stesso timestamp se lo miglioro
             List<V> lResult = new ArrayList<>();
             for (int c = 0; c < chunkSeq; c++) {
-                lResult.addAll(getChunkFwd(key, timestamp, c, param).data);
+                lResult.addAll(getChunkFwd(key, timestamp, c, true, param).data);
             }
             if (chunk != null) {
                 lResult.addAll(chunk.data);
@@ -310,7 +320,7 @@ public class TimestampedCache<K, V, P> {
         // Da fuori ho gia' iniziato a scorrere i chunk in avanti: continuo sulla cache standard
         if (chunkSeq != LAST && chunkSeq >= 0) {
             long startTs = endTs - slices[slices.length - 1];
-            return new GetBackResult<>(getChunkFwd(key, startTs, chunkSeq, param), chunkSeq, 0);
+            return new GetBackResult<>(getChunkFwd(key, startTs, chunkSeq, true, param), chunkSeq, 0);
         }
 
         if (chunkSeq == LAST) {
@@ -627,7 +637,7 @@ public class TimestampedCache<K, V, P> {
             this.endOfDataBackwards = endOfDataBackwards;
             this.inverted = inverted;
             if (data.isEmpty() && !complete) {
-                throw new IllegalStateException("Empty chunks must be complete");
+                throw new IllegalStateException("Empty chunks must be complete; incomplete chunks must have some data");
             }
             if (data.isEmpty() && hasNextChunk) {
                 throw new IllegalStateException("Empty chunks cannot have a next chunk");
@@ -658,19 +668,19 @@ public class TimestampedCache<K, V, P> {
             return new Chunk<>(ImmutableList.of(), sliceLevel, true, false, endOfDataForward, endOfDataBackwards, true);
         }
 
-        public PeekingIterator<V> iterator() {
+        public CountingIterator<V> iterator() {
             if (inverted) {
-                return Iterators.peekingIterator(Lists.reverse(data).iterator());
+                return CountingIterator.create(Lists.reverse(data).iterator());
             } else {
-                return Iterators.peekingIterator(data.iterator());
+                return CountingIterator.create(data.iterator());
             }
         }
 
-        public PeekingIterator<V> backIterator() {
+        public CountingIterator<V> backIterator() {
             if (!inverted) {
-                return Iterators.peekingIterator(Lists.reverse(data).iterator());
+                return CountingIterator.create(Lists.reverse(data).iterator());
             } else {
-                return Iterators.peekingIterator(data.iterator());
+                return CountingIterator.create(data.iterator());
             }
         }
     }

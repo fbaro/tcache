@@ -106,6 +106,7 @@ public class TimestampedCacheTest {
     @Test
     public void verifyWithoutChunking() {
         long[] chunks = {4000, 2000, 1000, 200};
+        test(chunks, 4, 800, 1225); // In questo test un chunk incompleto cambia slicing quando si completa
         for (int chunkSize = 2; chunkSize < 55; chunkSize++) {
             for (long start = 0; start < 1000; start += 25) {
                 for (long end = start + 100; end < start + 500; end += 25) {
@@ -185,6 +186,12 @@ public class TimestampedCacheTest {
         test(new long[]{5000, 1000, 100}, 4, 4900, 5000);
         assertEquals(3, loadCount);
         test(new long[]{5000, 1000, 100}, 4, 0, 2000);
+    }
+
+    @Test
+    public void verifyDoesNotLoadTwoFullSlicesToAnswerRequestWithPartiallyLoadedChunk() {
+        test(new long[]{5000, 1000}, 4, 0, 400);
+        assertEquals(1, loadCount);
     }
 
     @Test
