@@ -195,6 +195,12 @@ public class TimestampedCacheTest {
     }
 
     @Test
+    public void verifyDoesNotKeepLoadingPastEndOfData() {
+        test(new long[]{1000}, 20, 4500, 10000);
+        assertEquals(1, loadCount);
+    }
+
+    @Test
     @Category(SlowTests.class)
     public void randomized() {
         for (double d = 1; d < 100; d += .1) {
