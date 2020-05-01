@@ -264,14 +264,31 @@ public class TimestampedCache<K, V, P> {
     }
 
     /**
-     * Removes specific data from the cache.
+     * Removes specific data from the cache. Due to the slicing algorithm, more than the requested data might actually
+     * be removed from the cache. As the cache has no notion of its own boundaries, using this method with a very high
+     * range will make it quite slow.
      *
      * @param key              The key
      * @param lowestTimestamp  The beginning timestamp (included)
      * @param highestTimestamp The ending timestamp (excluded)
      */
     public void invalidate(K key, long lowestTimestamp, long highestTimestamp) {
-        throw new UnsupportedOperationException("TODO");
+        long ts = roundDown(lowestTimestamp, slices[0]);
+        int seqNo = 0;
+        while (ts < highestTimestamp) {
+            Key<K> k = Key.asc(key, ts, 0);
+            Chunk<V> chunk = cache.getIfPresent(k);
+            while (chunk != null) {
+                cache.invalidate(k);
+                if (!chunk.complete || !chunk.hasNextChunk()) {
+                    break;
+                }
+                k = Key.asc(key, ts, ++seqNo);
+                chunk = cache.getIfPresent(k);
+            }
+
+            ts += slices[chunk == null ? slices.length - 1 : chunk.sliceLevel];
+        }
     }
 
     /**
@@ -523,7 +540,7 @@ public class TimestampedCache<K, V, P> {
                         for (int i = numChunks - 1; i >= 0; i--) {
                             int startIdx = i * chunkSize;
                             int endIdx = Math.min((i + 1) * chunkSize, sliceEnd);
-                            Chunk<V> chunk = new Chunk<>(sliceData.subList(startIdx, endIdx), s, true, i < numChunks - 1, false,  endOfData && sliceEnd == result.size() && i == 0, false);
+                            Chunk<V> chunk = new Chunk<>(sliceData.subList(startIdx, endIdx), s, true, i < numChunks - 1, false, endOfData && sliceEnd == result.size() && i == 0, false);
                             cache.put(Key.asc(key, startTs, i), chunk);
                             // Sto raddrizzando i dati, quindi devo restituire un chunk parecchio diverso da quello richiesto
                             // e se il raddrizzamento ha cambiato i "bordi" dei chunk devo riprendere da un certo indice

@@ -208,6 +208,26 @@ public class TimestampedCacheTest {
     }
 
     @Test
+    public void verifyInvalidationWithoutChunks() {
+        TimestampedCache<String, Long, Void> cache = new TimestampedCache<>(12, new long[]{5000, 1000}, v -> v, loader);
+        test(cache, 1200, 2500);
+        int l = loadCount;
+        cache.invalidate("", 1200, 2500);
+        test(cache, 1200, 2500);
+        assertEquals(l * 2, loadCount);
+    }
+
+    @Test
+    public void verifyInvalidationWithChunks() {
+        TimestampedCache<String, Long, Void> cache = new TimestampedCache<>(4, new long[]{5000, 1000}, v -> v, loader);
+        test(cache, 1200, 2500);
+        int l = loadCount;
+        cache.invalidate("", 1200, 2500);
+        test(cache, 1200, 2500);
+        assertEquals(l * 2, loadCount);
+    }
+
+    @Test
     @Category(SlowTests.class)
     public void randomized() {
         for (double d = 1; d < 100; d += .1) {
