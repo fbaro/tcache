@@ -7,7 +7,6 @@ import com.google.common.base.Preconditions;
 import com.google.common.collect.AbstractIterator;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
-import com.google.common.collect.PeekingIterator;
 
 import javax.annotation.Nullable;
 
@@ -210,7 +209,7 @@ public class TimestampedCache<K, V, P> {
             private long nextEndTimestamp;
             private int nextChunkSeq;
             private GetBackResult<V> curChunk = null;
-            private PeekingIterator<V> curChunkIterator;
+            private CountingIterator<V> curChunkIterator;
 
             private void init() {
                 for (long slice : slices) {
@@ -483,7 +482,7 @@ public class TimestampedCache<K, V, P> {
         if (result.isEmpty()) {
             Preconditions.checkState(retChunkSeq == -1);
             int s = minSliceLevel(endTs);
-            Chunk<V> chunk = new Chunk<>(ImmutableList.of(), s, true, false, false, false, false);
+            Chunk<V> chunk = Chunk.empty(s, false, false);
             cache.put(Key.asc(key, endTs - slices[s], 0), chunk);
             return new GetBackResult<>(chunk, 0, 0);
         }
@@ -658,15 +657,6 @@ public class TimestampedCache<K, V, P> {
             return startTimestamp + slices[sliceLevel];
         }
 
-        static <V> Chunk<V> empty(int sliceLevel, boolean endOfDataForward, boolean endOfDataBackwards) {
-            // TODO: Cache
-            return new Chunk<>(ImmutableList.of(), sliceLevel, true, false, endOfDataForward, endOfDataBackwards, false);
-        }
-
-        static <V> Chunk<V> invertedEmpty(int sliceLevel, boolean endOfDataForward, boolean endOfDataBackwards) {
-            // TODO: Cache
-            return new Chunk<>(ImmutableList.of(), sliceLevel, true, false, endOfDataForward, endOfDataBackwards, true);
-        }
 
         public CountingIterator<V> iterator() {
             if (inverted) {
@@ -681,6 +671,37 @@ public class TimestampedCache<K, V, P> {
                 return CountingIterator.create(Lists.reverse(data).iterator());
             } else {
                 return CountingIterator.create(data.iterator());
+            }
+        }
+
+        static <V> Chunk<V> empty(int sliceLevel, boolean endOfDataForward, boolean endOfDataBackwards) {
+            if (sliceLevel < EMPTY_CACHE_SIZE) {
+                //noinspection unchecked
+                return (Chunk<V>) EMPTY_CACHE.get(sliceLevel + EMPTY_CACHE_SIZE * (endOfDataBackwards ? 1 : 0) + EMPTY_CACHE_SIZE * 2 * (endOfDataForward ? 1 : 0));
+            }
+            return new Chunk<>(ImmutableList.of(), sliceLevel, true, false, endOfDataForward, endOfDataBackwards, false);
+        }
+
+        static <V> Chunk<V> invertedEmpty(int sliceLevel, boolean endOfDataForward, boolean endOfDataBackwards) {
+            if (sliceLevel < EMPTY_CACHE_SIZE) {
+                //noinspection unchecked
+                return (Chunk<V>) EMPTY_CACHE.get(sliceLevel + EMPTY_CACHE_SIZE * (endOfDataBackwards ? 1 : 0) + EMPTY_CACHE_SIZE * 2 * (endOfDataForward ? 1 : 0) + EMPTY_CACHE_SIZE * 4);
+            }
+            return new Chunk<>(ImmutableList.of(), sliceLevel, true, false, endOfDataForward, endOfDataBackwards, true);
+        }
+
+        private static final int EMPTY_CACHE_SIZE = 32;
+        private static final List<Chunk<Object>> EMPTY_CACHE = new ArrayList<>(2 * 2 * 2 * EMPTY_CACHE_SIZE);
+
+        static {
+            for (boolean inverted : new boolean[]{false, true}) {
+                for (boolean endOfDataForward : new boolean[]{false, true}) {
+                    for (boolean endOfDataBackwards : new boolean[]{false, true}) {
+                        for (int s = 0; s < EMPTY_CACHE_SIZE; s++) {
+                            EMPTY_CACHE.add(new Chunk<>(ImmutableList.of(), s, true, false, endOfDataForward, endOfDataBackwards, inverted));
+                        }
+                    }
+                }
             }
         }
     }
