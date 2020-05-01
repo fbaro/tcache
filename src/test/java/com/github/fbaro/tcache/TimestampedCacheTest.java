@@ -198,6 +198,13 @@ public class TimestampedCacheTest {
     public void verifyDoesNotKeepLoadingPastEndOfData() {
         test(new long[]{1000}, 20, 4500, 10000);
         assertEquals(1, loadCount);
+        test(new long[]{1000}, 20, 10000, 20000);
+        assertEquals(2, loadCount);
+
+        back(new long[]{1000}, 20, -10000, 500);
+        assertEquals(3, loadCount);
+        back(new long[]{1000}, 20, -20000, -10000);
+        assertEquals(4, loadCount);
     }
 
     @Test

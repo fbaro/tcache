@@ -252,7 +252,7 @@ public class TimestampedCache<K, V, P> {
                         }
                     }
 
-                    if (nextEndTimestamp <= lowestTimestamp) {
+                    if (curChunk.chunk.endOfDataBackwards || nextEndTimestamp <= lowestTimestamp) {
                         return endOfData();
                     }
 
@@ -378,7 +378,7 @@ public class TimestampedCache<K, V, P> {
             Loader.Result<? extends V> result = loader.loadBackwards(key, endTs - slices[0], endTs, 0, chunkSize + 1, param);
             List<V> lResult = ImmutableList.copyOf(result.getData());
             long resultStartTs = result.getData().size() == chunkSize + 1 ? timestamper.applyAsLong(lResult.get(lResult.size() - 1)) : endTs - slices[0];
-            return arrangeBack(key, endTs, -1, resultStartTs, lResult);
+            return arrangeBack(key, endTs, -1, resultStartTs, lResult, result.isEndOfData());
         } else {
             // Completo i dati parziali facendo un'altra load all'indietro
             long lastTs = timestamper.applyAsLong(chunkUnion.get(chunkUnion.size() - 1));
@@ -387,7 +387,7 @@ public class TimestampedCache<K, V, P> {
             Loader.Result<? extends V> result = loader.loadBackwards(key, loadEndTs - slices[0], loadEndTs, chunkUnion.size() - lastTsFirstIdx, chunkSize + 1, param);
             chunkUnion.addAll(result.getData());
             long resultStartTs = result.getData().size() == chunkSize + 1 ? timestamper.applyAsLong(chunkUnion.get(chunkUnion.size() - 1)) : endTs - slices[0];
-            return arrangeBack(key, endTs, chunkSeq, resultStartTs, ImmutableList.copyOf(chunkUnion));
+            return arrangeBack(key, endTs, chunkSeq, resultStartTs, ImmutableList.copyOf(chunkUnion), result.isEndOfData());
         }
     }
 
@@ -407,7 +407,7 @@ public class TimestampedCache<K, V, P> {
         if (result.isEmpty()) {
             Preconditions.checkState(retChunkSeq == 0);
             int s = minSliceLevel(timestamp);
-            Chunk<V> chunk = Chunk.empty(s, endOfData);
+            Chunk<V> chunk = Chunk.empty(s, endOfData, false);
             cache.put(Key.asc(key, timestamp, 0), chunk);
             return chunk;
         }
@@ -458,7 +458,7 @@ public class TimestampedCache<K, V, P> {
             }
         }
 
-        return ret != null ? ret : Chunk.empty(minSliceLevel(timestamp), false);
+        return ret != null ? ret : Chunk.empty(minSliceLevel(timestamp), false, false);
     }
 
     /**
@@ -470,13 +470,14 @@ public class TimestampedCache<K, V, P> {
      * @param resultStartTimestamp Indica che tra il timestamp del primo dato e questo timestamp (incluso) non ci sono altri dati.
      *                             Puo' essere maggiore o uguale al timestamp dell'ultimo dato, e in questo caso non indica nulla.
      * @param result               I dati da inserire in cache, ordinati per timestamp decrescente
+     * @param endOfData            Indica se abbiamo raggiunto il flag di endOfData leggendo dal Loader
      * @return Il chunk che termina in endTs e contiene i primi dati presenti in result
      */
-    private GetBackResult<V> arrangeBack(K key, long endTs, int retChunkSeq, long resultStartTimestamp, List<V> result) {
+    private GetBackResult<V> arrangeBack(K key, long endTs, int retChunkSeq, long resultStartTimestamp, List<V> result, boolean endOfData) {
         if (result.isEmpty()) {
             Preconditions.checkState(retChunkSeq == -1);
             int s = minSliceLevel(endTs);
-            Chunk<V> chunk = Chunk.empty(s, false);
+            Chunk<V> chunk = Chunk.empty(s, false, endOfData);
             cache.put(Key.asc(key, endTs - slices[s], 0), chunk);
             return new GetBackResult<>(chunk, 0, 0);
         }
@@ -498,12 +499,12 @@ public class TimestampedCache<K, V, P> {
                     // o se so che non ci sono altri dati oltre startTs
                     boolean complete = sliceEnd < result.size() || startTs >= resultStartTimestamp;
                     if (complete) {
-                        Chunk<V> chunk = new Chunk<>(Lists.reverse(result.subList(0, sliceEnd)), s, true, false, false, false, false);
+                        Chunk<V> chunk = new Chunk<>(Lists.reverse(result.subList(0, sliceEnd)), s, true, false, false, endOfData && sliceEnd == result.size(), false);
                         // TODO: Svuotare la pCache? Come?
                         cache.put(Key.asc(key, startTs, 0), chunk);
                         ret = (ret == null ? new GetBackResult<>(chunk, 0, 0) : ret);
                     } else {
-                        Chunk<V> chunk = new Chunk<>(result.subList(0, sliceEnd), s, false, false, false, false, true);
+                        Chunk<V> chunk = new Chunk<>(result.subList(0, sliceEnd), s, false, false, false, endOfData && sliceEnd == result.size(), true);
                         cache.put(Key.desc(key, endTs, -1), chunk);
                         ret = (ret == null ? new GetBackResult<>(chunk, -1, 0) : ret);
                     }
@@ -522,7 +523,7 @@ public class TimestampedCache<K, V, P> {
                         for (int i = numChunks - 1; i >= 0; i--) {
                             int startIdx = i * chunkSize;
                             int endIdx = Math.min((i + 1) * chunkSize, sliceEnd);
-                            Chunk<V> chunk = new Chunk<>(sliceData.subList(startIdx, endIdx), s, true, i < numChunks - 1, false, false, false);
+                            Chunk<V> chunk = new Chunk<>(sliceData.subList(startIdx, endIdx), s, true, i < numChunks - 1, false,  endOfData && sliceEnd == result.size() && i == 0, false);
                             cache.put(Key.asc(key, startTs, i), chunk);
                             // Sto raddrizzando i dati, quindi devo restituire un chunk parecchio diverso da quello richiesto
                             // e se il raddrizzamento ha cambiato i "bordi" dei chunk devo riprendere da un certo indice
@@ -534,7 +535,7 @@ public class TimestampedCache<K, V, P> {
                         for (int i = 0; i < numChunks; i++) {
                             int startIdx = i * chunkSize;
                             int endIdx = Math.min((i + 1) * chunkSize, sliceEnd);
-                            Chunk<V> chunk = new Chunk<>(result.subList(startIdx, endIdx), s, i < numChunks - 1, i < numChunks - 1, false, false, true);
+                            Chunk<V> chunk = new Chunk<>(result.subList(startIdx, endIdx), s, i < numChunks - 1, i < numChunks - 1, false, endOfData && sliceEnd == result.size() && i == numChunks - 1, true);
                             cache.put(Key.desc(key, endTs, -i - 1), chunk);
                             ret = (ret == null && retChunkSeq == -i - 1 ? new GetBackResult<>(chunk, -i - 1, 0) : ret);
                         }
@@ -546,7 +547,7 @@ public class TimestampedCache<K, V, P> {
             }
         }
 
-        return ret != null ? ret : new GetBackResult<>(Chunk.invertedEmpty(minSliceLevel(endTs), false), retChunkSeq, 0);
+        return ret != null ? ret : new GetBackResult<>(new Chunk<>(ImmutableList.of(), minSliceLevel(endTs), true, false, false, false, true), retChunkSeq, 0);
     }
 
     private int minSliceLevel(long timestamp) {
@@ -667,7 +668,7 @@ public class TimestampedCache<K, V, P> {
                 if (!complete || hasNextChunk) {
                     throw new IllegalArgumentException("Cannot create empty+incomplete or empty+hasNext chunk");
                 }
-                return empty(sliceLevel, endOfDataForward);
+                return empty(sliceLevel, endOfDataForward, false);
             }
             return new Chunk<>(data, sliceLevel, complete, hasNextChunk, endOfDataForward, false, false);
         }
@@ -677,36 +678,28 @@ public class TimestampedCache<K, V, P> {
                 if (!complete || hasNextChunk) {
                     throw new IllegalArgumentException("Cannot create empty+incomplete or empty+hasNext chunk");
                 }
-                return invertedEmpty(sliceLevel, endOfDataBackwards);
+                return new Chunk<>(ImmutableList.of(), sliceLevel, true, false, false, endOfDataBackwards, true);
             }
             return new Chunk<>(data, sliceLevel, complete, hasNextChunk, false, endOfDataBackwards, true);
         }
 
-        static <V> Chunk<V> empty(int sliceLevel, boolean endOfDataForward) {
+        static <V> Chunk<V> empty(int sliceLevel, boolean endOfDataForward, boolean endOfDataBackwards) {
             if (sliceLevel < EMPTY_CACHE_SIZE) {
                 //noinspection unchecked
-                return (Chunk<V>) EMPTY_CACHE.get(sliceLevel + EMPTY_CACHE_SIZE * (endOfDataForward ? 1 : 0));
+                return (Chunk<V>) EMPTY_CACHE.get(sliceLevel + 2 * EMPTY_CACHE_SIZE * (endOfDataForward ? 1 : 0) + EMPTY_CACHE_SIZE * (endOfDataBackwards ? 1 : 0));
             }
-            return new Chunk<>(ImmutableList.of(), sliceLevel, true, false, endOfDataForward, false, false);
-        }
-
-        static <V> Chunk<V> invertedEmpty(int sliceLevel, boolean endOfDataBackwards) {
-            if (-sliceLevel < EMPTY_CACHE_SIZE) {
-                //noinspection unchecked
-                return (Chunk<V>) INVERTED_EMPTY_CACHE.get(-sliceLevel + EMPTY_CACHE_SIZE * (endOfDataBackwards ? 1 : 0));
-            }
-            return new Chunk<>(ImmutableList.of(), sliceLevel, true, false, false, endOfDataBackwards, true);
+            return new Chunk<>(ImmutableList.of(), sliceLevel, true, false, endOfDataForward, endOfDataBackwards, false);
         }
 
         private static final int EMPTY_CACHE_SIZE = 32;
         private static final List<Chunk<Object>> EMPTY_CACHE = new ArrayList<>(2 * 2 * 2 * EMPTY_CACHE_SIZE);
-        private static final List<Chunk<Object>> INVERTED_EMPTY_CACHE = new ArrayList<>(2 * 2 * 2 * EMPTY_CACHE_SIZE);
 
         static {
-            for (boolean endOfData : new boolean[]{false, true}) {
-                for (int s = 0; s < EMPTY_CACHE_SIZE; s++) {
-                    EMPTY_CACHE.add(new Chunk<>(ImmutableList.of(), s, true, false, endOfData, false, false));
-                    INVERTED_EMPTY_CACHE.add(new Chunk<>(ImmutableList.of(), -s, true, false, false, endOfData, true));
+            for (boolean endOfDataForward : new boolean[]{false, true}) {
+                for (boolean endOfDataBackwards : new boolean[]{false, true}) {
+                    for (int s = 0; s < EMPTY_CACHE_SIZE; s++) {
+                        EMPTY_CACHE.add(new Chunk<>(ImmutableList.of(), s, true, false, endOfDataForward, endOfDataBackwards, false));
+                    }
                 }
             }
         }
