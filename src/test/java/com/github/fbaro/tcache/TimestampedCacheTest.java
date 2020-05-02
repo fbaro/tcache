@@ -253,7 +253,7 @@ public class TimestampedCacheTest {
     public void randomized() { // TODO: Fare un po' di "concorrenza" tenendo gli iteratori aperti e facendo altre query nel frattempo
         List<Long> dataBackup = new ArrayList<>(data);
         for (int d = 0; d < 1000; d += 1) {
-            long seed = 1588428457444L;// System.currentTimeMillis();
+            long seed = System.currentTimeMillis();
             System.out.println(seed);
             Random rnd = new Random(seed);
             double addProbability = rnd.nextDouble();
@@ -281,6 +281,7 @@ public class TimestampedCacheTest {
                             case 2:
                                 test(cache, start, end);
                                 back(cache, start, end);
+                                break;
                             case 3:
                                 back(cache, start, end);
                                 test(cache, start, end);
@@ -304,7 +305,7 @@ public class TimestampedCacheTest {
     }
 
     private void test(TimestampedCache<String, Long, Void> cache, long start, long end) {
-        System.out.println("Forward start = [" + start + "], end = [" + end + "]");
+        //System.out.println("Forward start = [" + start + "], end = [" + end + "]");
         List<Long> result = new ArrayList<>();
         try {
             cache.getForward("", start, end, null)
@@ -321,7 +322,7 @@ public class TimestampedCacheTest {
     }
 
     private void back(TimestampedCache<String, Long, Void> cache, long start, long end) {
-        System.out.println("Backwards start = [" + start + "], end = [" + end + "]");
+        //System.out.println("Backwards start = [" + start + "], end = [" + end + "]");
         List<Long> result = new ArrayList<>();
         try {
             cache.getBackwards("", start, end, null)

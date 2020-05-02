@@ -162,12 +162,13 @@ public class TimestampedCache<K, V, P> {
                     curChunk = getChunkFwd(key, curTimestamp, curChunkSeq, true, param);
                     curChunkIterator = curChunk.iterator();
                     while (toSkip > 0) {
-                        curChunkIterator.next();
-                        toSkip--;
-                        if (toSkip > 0 && !curChunkIterator.hasNext()) {
+                        if (!curChunkIterator.hasNext()) {
                             // Questo puo' succedere se il chunk incompleto era ad un livello di slicing,
                             // ma quando ho cercato di completarlo lo slicing e' diventato piu' fine
                             moveToNextChunk();
+                        } else {
+                            curChunkIterator.next();
+                            toSkip--;
                         }
                     }
                 }
