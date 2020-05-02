@@ -52,7 +52,7 @@ public class TimestampedCacheTest {
                 .skip(offset)
                 .limit(limit)
                 .collect(Collectors.toList());
-        return new Loader.StdResult<>(ret, data.isEmpty() || (ret.size() < limit && highestExcluded >= data.get(data.size() - 1)));
+        return new Loader.StdResult<>(ret, data.isEmpty() || (ret.size() < limit && highestExcluded > data.get(data.size() - 1)));
     }
 
     private Loader.Result<Long> loadBkw(long lowestIncluded, long highestExcluded, int offset, int limit) {
@@ -62,7 +62,7 @@ public class TimestampedCacheTest {
                 .skip(offset)
                 .limit(limit)
                 .collect(Collectors.toList());
-        return new Loader.StdResult<>(ret, data.isEmpty() || (ret.size() < limit && lowestIncluded < data.get(data.size() - 1)));
+        return new Loader.StdResult<>(ret, data.isEmpty() || (ret.size() < limit && lowestIncluded <= data.get(0)));
     }
 
     private List<Long> getBkw(long lowestExcluded, long highestIncluded, int offset, int limit) {
@@ -252,9 +252,9 @@ public class TimestampedCacheTest {
     @Category(SlowTests.class)
     public void randomized() { // TODO: Fare un po' di "concorrenza" tenendo gli iteratori aperti e facendo altre query nel frattempo
         List<Long> dataBackup = new ArrayList<>(data);
-        for (int d = 0; d < 1000; d += 1) {
-            long seed = System.currentTimeMillis();
-            System.out.println(seed);
+        for (int d = 0; d < 10000; d += 1) {
+            long seed = System.nanoTime();
+            System.out.println(seed + "L");
             Random rnd = new Random(seed);
             double addProbability = rnd.nextDouble();
             data.clear();
@@ -266,33 +266,25 @@ public class TimestampedCacheTest {
 
             long[] chunks = {5000, 1000, 500};
             for (int chunkSize = 2; chunkSize < 55; chunkSize++) {
-                for (int i = 0; i < 100; i++) {
-                    TimestampedCache<String, Long, Void> cache = new TimestampedCache<>(chunkSize, chunks, v -> v, loader);
-                    for (int j = 0; j < 20; j++) {
-                        long start = rnd.nextInt(5500) - 250;
-                        long end = rnd.nextInt(2000) + start;
-                        switch (rnd.nextInt(4)) {
-                            case 0:
-                                test(cache, start, end);
-                                break;
-                            case 1:
-                                back(cache, start, end);
-                                break;
-                            case 2:
-                                test(cache, start, end);
-                                back(cache, start, end);
-                                break;
-                            case 3:
-                                back(cache, start, end);
-                                test(cache, start, end);
-                                break;
-                        }
-                    }
-                }
-                for (long start = 0; start < 1500; start += 25) {
-                    for (long end = start + 100; end < start + 1250; end += 25) {
-                        test(chunks, chunkSize, start, end);
-                        back(chunks, chunkSize, start, end);
+                TimestampedCache<String, Long, Void> cache = new TimestampedCache<>(chunkSize, chunks, v -> v, loader);
+                for (int j = 0; j < 20; j++) {
+                    long start = rnd.nextInt(5500) - 250;
+                    long end = rnd.nextInt(2000) + start;
+                    switch (rnd.nextInt(4)) {
+                        case 0:
+                            test(cache, start, end);
+                            break;
+                        case 1:
+                            back(cache, start, end);
+                            break;
+                        case 2:
+                            test(cache, start, end);
+                            back(cache, start, end);
+                            break;
+                        case 3:
+                            back(cache, start, end);
+                            test(cache, start, end);
+                            break;
                     }
                 }
             }
