@@ -7,6 +7,7 @@ import org.junit.experimental.categories.Category;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Iterator;
 import java.util.List;
 import java.util.Random;
 import java.util.stream.Collectors;
@@ -228,20 +229,40 @@ public class TimestampedCacheTest {
     }
 
     @Test
+    public void verifyDoubleBackwardsLoading() {
+        // Tengo un iteratore aperto e parzialmente avanzato
+        // Con un altro iteratore carico quello che vorrebbe il primo
+        // Voglio che il raddrizzamento non mi causi una doppia load
+        TimestampedCache<String, Long, Void> cache = new TimestampedCache<>(4, new long[]{5000, 1000}, v -> v, loader);
+        Iterator<Long> backIt = cache.getBackwards("", 1000, 1900, null);
+        for (int i = 0; i < 4; i++) {
+            assertEquals(1900L - i * 100, backIt.next().longValue());
+        }
+        back(cache, 1000, 1900);
+        int lc = loadCount;
+        for (int i = 4; i < 9; i++) {
+            assertEquals(1900L - i * 100, backIt.next().longValue());
+        }
+        assertEquals(lc, loadCount);
+        back(cache, 1000, 1900);
+        assertEquals(lc, loadCount);
+    }
+
+    @Test
     @Category(SlowTests.class)
-    public void randomized() {
-        for (double d = 1; d < 100; d += .1) {
-            long seed = System.currentTimeMillis();
+    public void randomized() { // TODO: Fare un po' di "concorrenza" tenendo gli iteratori aperti e facendo altre query nel frattempo
+        List<Long> dataBackup = new ArrayList<>(data);
+        for (int d = 0; d < 1000; d += 1) {
+            long seed = 1588428457444L;// System.currentTimeMillis();
             System.out.println(seed);
             Random rnd = new Random(seed);
-            List<Long> data0 = new ArrayList<>();
-            for (int i = 0; i < data.size(); i++) {
-                if (rnd.nextDouble() <= d / 100) {
-                    data0.add(data.get(i));
+            double addProbability = rnd.nextDouble();
+            data.clear();
+            for (int i = 0; i < dataBackup.size(); i++) {
+                if (rnd.nextDouble() <= addProbability) {
+                    data.add(dataBackup.get(i));
                 }
             }
-            data.clear();
-            data.addAll(data0);
 
             long[] chunks = {5000, 1000, 500};
             for (int chunkSize = 2; chunkSize < 55; chunkSize++) {
@@ -283,11 +304,15 @@ public class TimestampedCacheTest {
     }
 
     private void test(TimestampedCache<String, Long, Void> cache, long start, long end) {
-        //System.out.println("Testing chunkSize = [" + cache.getChunkSize() + "], start = [" + start + "], end = [" + end + "]");
+        System.out.println("Forward start = [" + start + "], end = [" + end + "]");
         List<Long> result = new ArrayList<>();
-        cache.getForward("", start, end, null)
-                .forEachRemaining(result::add);
-        assertEquals("Error at chunk size " + cache.getChunkSize() + " start = " + start + " end = " + end, loadFwd(start, end, 0, 1000).getData(), result);
+        try {
+            cache.getForward("", start, end, null)
+                    .forEachRemaining(result::add);
+        } catch (RuntimeException ex) {
+            throw new AssertionError("Error at chunk size " + cache.getChunkSize() + " start = " + start + " end = " + end + " data = " + data, ex);
+        }
+        assertEquals("Error at chunk size " + cache.getChunkSize() + " start = " + start + " end = " + end + " data = " + data, loadFwd(start, end, 0, 1000).getData(), result);
     }
 
     private void back(long[] chunks, int chunkSize, long start, long end) {
@@ -296,10 +321,14 @@ public class TimestampedCacheTest {
     }
 
     private void back(TimestampedCache<String, Long, Void> cache, long start, long end) {
-        //System.out.println("Testing chunkSize = [" + cache.getChunkSize() + "], start = [" + start + "], end = [" + end + "]");
+        System.out.println("Backwards start = [" + start + "], end = [" + end + "]");
         List<Long> result = new ArrayList<>();
-        cache.getBackwards("", start, end, null)
-                .forEachRemaining(result::add);
-        assertEquals("Error at chunk size " + cache.getChunkSize() + " start = " + start + " end = " + end, getBkw(start, end, 0, 1000), result);
+        try {
+            cache.getBackwards("", start, end, null)
+                    .forEachRemaining(result::add);
+        } catch (RuntimeException ex) {
+            throw new AssertionError("Error at chunk size " + cache.getChunkSize() + " start = " + start + " end = " + end + " data = " + data, ex);
+        }
+        assertEquals("Error at chunk size " + cache.getChunkSize() + " start = " + start + " end = " + end + " data = " + data, getBkw(start, end, 0, 1000), result);
     }
 }
