@@ -28,8 +28,6 @@ import java.util.function.ToLongFunction;
 @SuppressWarnings({"WeakerAccess", "unused"})
 public class TimestampedCache<K, V, P> {
 
-    public static final int LAST = Integer.MAX_VALUE;
-
     private final int chunkSize;
     private final long[] slices;
     /**
@@ -214,7 +212,7 @@ public class TimestampedCache<K, V, P> {
             private void init() {
                 for (long slice : slices) {
                     nextEndTimestamp = slice + roundDown(highestTimestamp, slice);
-                    curChunk = getChunkBack(key, nextEndTimestamp, LAST, param);
+                    curChunk = getChunkBack(key, nextEndTimestamp, -1, param);
                     if (nextEndTimestamp - slices[curChunk.chunk.sliceLevel] <= highestTimestamp) {
                         initChunk();
                         return;
@@ -229,7 +227,7 @@ public class TimestampedCache<K, V, P> {
                     nextChunkSeq = curChunk.chunkSeq - 1;
                 } else {
                     nextEndTimestamp -= slices[curChunk.chunk.sliceLevel];
-                    nextChunkSeq = LAST;
+                    nextChunkSeq = -1;
                 }
                 for (int i = 0; i < curChunk.toSkip; i++) {
                     curChunkIterator.next();
@@ -339,34 +337,40 @@ public class TimestampedCache<K, V, P> {
      */
     private GetBackResult<V> getChunkBack(K key, long endTs, int chunkSeq, P param) {
         // Da fuori ho gia' iniziato a scorrere i chunk in avanti: continuo sulla cache standard
-        if (chunkSeq != LAST && chunkSeq >= 0) {
+        if (chunkSeq >= 0) {
             long startTs = endTs - slices[slices.length - 1];
             return new GetBackResult<>(getChunkFwd(key, startTs, chunkSeq, true, param), chunkSeq, 0);
         }
 
-        if (chunkSeq == LAST) {
-            // Non ho info specifiche: provo a cercare nella cache in avanti
-            int l = slices.length;
-            for (int s = l - 1; s >= minSliceLevel(endTs); s--) {
-                long startTs = endTs - slices[s];
-                int cs = 0;
-                @Nullable Chunk<V> chunk;
-                do {
-                    Key<K> k = Key.asc(key, startTs, cs);
-                    chunk = cache.getIfPresent(k);
-                    cs++;
-                } while (chunk != null && chunk.complete && chunk.hasNextChunk());
-                if (chunk != null && chunk.complete) {
-                    if (chunk.sliceLevel == s) {
-                        return new GetBackResult<>(chunk, cs - 1, 0);
-                    }
-                    // Ho trovato uno slicing piu' basso di quello che mi aspettavo
-                    // Significa che lo slice che contiene i miei dati sarebbe a slicing piu' alto,
+        // Non ho info specifiche: provo a cercare nella cache in avanti
+        int l = slices.length;
+        for (int s = l - 1; s >= minSliceLevel(endTs); s--) {
+            long startTs = endTs - slices[s];
+            int nc = 0; // Number of loaded chunks
+            @Nullable Chunk<V> chunk;
+            do {
+                Key<K> k = Key.asc(key, startTs, nc);
+                chunk = cache.getIfPresent(k);
+                nc++;
+            } while (chunk != null && chunk.complete && chunk.hasNextChunk());
+            if (chunk != null && chunk.complete) {
+                if (chunk.sliceLevel != s) {
+                    // Ho trovato uno slicing piu' grossolano di quello che mi aspettavo
+                    // Significa che lo slice che contiene i miei dati sarebbe a slicing piu' fine,
                     // e lo ho gia' cercato senza trovarlo
                     break;
                 }
+                // Ho trovato lo slice che cercavo, completo di tutti i chunk, nella cache in avanti
+                // Localizzo il chunk in avanti che mi serve, la posizione al suo interno, e lo restituisco
+                if (chunkSeq == -1) {
+                    return new GetBackResult<>(chunk, nc - 1, 0);
+                } else {
+                    return new GetBackResult<>(
+                            getChunkFwd(key, startTs, nc + chunkSeq, true, param),
+                            nc + chunkSeq,
+                            chunkSize - chunk.data.size()); // Aggiusto lo skip se i bordi dei chunk non sono allineati
+                }
             }
-            chunkSeq = -1;
         }
 
         // A questo punto i dati non sono nella cache standard
