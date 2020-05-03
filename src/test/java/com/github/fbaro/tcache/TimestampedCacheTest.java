@@ -196,6 +196,12 @@ public class TimestampedCacheTest {
     }
 
     @Test
+    public void verifyDoesNotLoadTwoFullSlicesToAnswerRequestWithPartiallyLoadedChunkBackwards() {
+        back(new long[]{5000, 1000}, 4, 4500, 4900);
+        assertEquals(1, loadCount);
+    }
+
+    @Test
     public void verifyDoesNotKeepLoadingPastEndOfData() {
         test(new long[]{1000}, 20, 4500, 10000);
         assertEquals(1, loadCount);

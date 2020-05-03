@@ -212,7 +212,7 @@ public class TimestampedCache<K, V, P> {
             private void init() {
                 for (long slice : slices) {
                     curEndTimestamp = slice + roundDown(highestTimestamp, slice);
-                    curChunk = getChunkBack(key, curEndTimestamp, -1, param);
+                    curChunk = getChunkBack(key, curEndTimestamp, -1, false, param);
                     if (curEndTimestamp - slices[curChunk.chunk.sliceLevel] <= highestTimestamp) {
                         initChunk();
                         return;
@@ -233,33 +233,52 @@ public class TimestampedCache<K, V, P> {
                 if (curChunk == null) {
                     init();
                 }
-                while (true) {
-                    while (curChunkIterator.hasNext()) {
-                        V ret = curChunkIterator.next();
-                        long retTs = timestamper.applyAsLong(ret);
-                        if (retTs <= lowestTimestamp) {
-                            return endOfData();
-                        } else if (retTs <= highestTimestamp) {
-                            return ret;
+                for (; curChunkIterator.hasNext() || !curChunk.chunk.complete || (!curChunk.chunk.endOfDataBackwards && getPrevEndTimestamp() > lowestTimestamp); moveToPrevChunk()) {
+                    for (; curChunkIterator.hasNext() || !curChunk.chunk.complete; completeChunk()) {
+                        while (curChunkIterator.hasNext()) {
+                            V ret = curChunkIterator.next();
+                            long retTs = timestamper.applyAsLong(ret);
+                            if (retTs <= lowestTimestamp) {
+                                return endOfData();
+                            } else if (retTs <= highestTimestamp) {
+                                return ret;
+                            }
                         }
                     }
-
-                    if (curChunk.chunk.endOfDataBackwards) {
-                        return endOfData();
-                    }
-                    int curChunkSeq;
-                    if (curChunk.hasPrevChunk()) {
-                        curChunkSeq = curChunk.chunkSeq - 1;
-                    } else {
-                        curEndTimestamp -= slices[curChunk.chunk.sliceLevel];
-                        curChunkSeq = -1;
-                    }
-                    if (curEndTimestamp <= lowestTimestamp) {
-                        return endOfData();
-                    }
-                    curChunk = getChunkBack(key, curEndTimestamp, curChunkSeq, param);
-                    initChunk();
                 }
+                return endOfData();
+            }
+
+            private void completeChunk() {
+                if (!curChunk.chunk.complete) {
+                    int toSkip = curChunkIterator.getCount();
+                    curChunk = getChunkBack(key, curEndTimestamp, curChunk.chunkSeq, true, param);
+                    initChunk();
+                    while (toSkip > 0) {
+                        if (!curChunkIterator.hasNext()) {
+                            // Questo puo' succedere se il chunk incompleto era ad un livello di slicing,
+                            // ma quando ho cercato di completarlo lo slicing e' diventato piu' fine
+                            moveToPrevChunk();
+                        } else {
+                            curChunkIterator.next();
+                            toSkip--;
+                        }
+                    }
+                }
+            }
+
+            private void moveToPrevChunk() {
+                if (curChunk.hasPrevChunk()) {
+                    curChunk = getChunkBack(key, curEndTimestamp, curChunk.chunkSeq - 1, false, param);
+                } else {
+                    curEndTimestamp -= slices[curChunk.chunk.sliceLevel];
+                    curChunk = getChunkBack(key, curEndTimestamp, -1, false, param);
+                }
+                initChunk();
+            }
+
+            private long getPrevEndTimestamp() {
+                return !curChunk.chunk.complete || curChunk.hasPrevChunk() ? curEndTimestamp : curEndTimestamp - slices[curChunk.chunk.sliceLevel];
             }
         };
     }
@@ -338,7 +357,7 @@ public class TimestampedCache<K, V, P> {
      * @param endTs Il timestamp di fine del chunk da cercare
      * @return Un chunk, o {@code null}
      */
-    private GetBackResult<V> getChunkBack(K key, long endTs, int chunkSeq, P param) {
+    private GetBackResult<V> getChunkBack(K key, long endTs, int chunkSeq, boolean mustBeComplete, P param) {
         // Da fuori ho gia' iniziato a scorrere i chunk in avanti: continuo sulla cache standard
         if (chunkSeq >= 0) {
             long startTs = endTs - slices[slices.length - 1];
@@ -380,7 +399,7 @@ public class TimestampedCache<K, V, P> {
         // Cerco nella cache dei parziali all'indietro
         Key<K> pKey = Key.desc(key, endTs, chunkSeq);
         Chunk<V> pChunk = cache.getIfPresent(pKey);
-        if (pChunk != null && pChunk.complete) {
+        if (pChunk != null && (!mustBeComplete || pChunk.complete)) {
             return new GetBackResult<>(pChunk, chunkSeq, 0);
         }
 
@@ -388,7 +407,7 @@ public class TimestampedCache<K, V, P> {
         // Ricostruisco quel che so dello slice, aggiungo un po' di dati e rifaccio una arrange
         List<V> chunkUnion = new ArrayList<>();
         for (int i = -1; i > chunkSeq; i--) {
-            GetBackResult<V> chunkBack = getChunkBack(key, endTs, i, param);
+            GetBackResult<V> chunkBack = getChunkBack(key, endTs, i, true, param);
             Preconditions.checkState(chunkBack.chunkSeq == i); // TODO: Problema di concorrenza?
             chunkUnion.addAll(chunkBack.chunk.data);
         }
