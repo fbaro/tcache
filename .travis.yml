@@ -6,7 +6,7 @@ dist: trusty
 jdk: oraclejdk8
 
 script:
-  - ./gradlew build slowTest --scan -s
+  - ./gradlew build slowTest -s
 
 before_cache:
   - rm -f  $HOME/.gradle/caches/modules-2/modules-2.lock
