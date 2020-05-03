@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.com/fbaro/tcache.svg?branch=master)](https://travis-ci.com/fbaro/tcache)
+
 # TCache
 A cache for time series data
 
@@ -8,7 +10,7 @@ A cache for time series data
 3. Implement a ToLongFunction from V which will extract a timestamp from V (hint: epoch time should work fine for most situations)
 4. Decide the maximum number of V's you want to keep together, called chunk size (hint: this will both be the maximum number of values you will have to provide to the cache in a single batch, and the maximum number of values that will be evicted all together from the cache)
 5. Decide the slice sizes (think about the maximum and the minimum time slice you expect to need to reach the chunk size. Put some values in between the two. Convert them to longs. Ensure each value is a divisor of its closes higher value. E.g. 7 days, 1 day, 6 hours, 1 hour, 15 minutes, 5 minutes, 1 minute, 15 seconds, 1 second).
-6. Implement the Loader, to provide data to the cache. You can pass a custom P type from the cache to the Loader, if you need it (e.g. a JDBC Connection?)
+6. Implement the Loader, to provide data to the cache. You can pass a custom P type from the cache to the Loader, if you need it (e.g. a JDBC Connection?). Take extra care with the lifetime of this (see documentation).
 7. ???
 8. Profit!
 
@@ -31,8 +33,9 @@ TimestampedCache<String, Data, Connection> cache = new TimestampedCache<>(
         (key, lowestIncluded, highestExcluded, offset, limit, param) -> {
             Instant from = Instant.ofEpochMilli(lowestIncluded);
             Instant to = Instant.ofEpochMilli(highestExcluded);
-            // ...
-            return new Loader.StdResult<>(Collections.emptyList(), false);
+            // results = ...
+            // isEndOfdata = ...
+            return new Loader.StdResult<>(results, isEndOfdata);
         });
 ```
 
@@ -42,13 +45,13 @@ In standard caching, the cache keys are discrete and unrelated values. The cache
 
 ## How?
 
-TCache uses a single standard cache data structure. Each element of the cache is a slice of a time series. The time range of a slice is variable, and is generally kept as large as possible while keeping the slice content below a threshold number of elements. The slice size is dynamically varying over all the time series span; so the slice will become bigger when fewer data is present, and smaller when more data is present.
+TCache is based upon a single standard cache data structure (provided by [Caffeine](https://github.com/ben-manes/caffeine)). Each element of the cache is a slice of a time series. The time range of a slice is variable, and is kept as large as possible while keeping the slice content below a threshold number of elements (the chunk size). The slice size is dynamically varying over all the time series span; so the slices will become bigger when fewer data is present, and smaller when more data is present.
 
 With this design, all the cache entries are occupying a comparable amount of memory, and standard eviction policies can be simply applied.
 
 ## Requirements
 
-TCache depends on guava for some collections-related classes, and on caffeine as the underlying cache implementation.
+TCache depends on [guava](https://github.com/google/guava) for some collections-related classes, and on [Caffeine](https://github.com/ben-manes/caffeine) as the underlying cache implementation.
 
 The timestamps in TCache are represented as long values. There can be more data points on the same timestamp, but too many of them will make the cache perform worse.
 
