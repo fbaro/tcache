@@ -1,6 +1,9 @@
 package com.github.fbaro.tcache;
 
+import javax.annotation.Nonnull;
+
 import java.util.Collection;
+import java.util.Objects;
 
 /**
  * Interface to provide data to a cache.
@@ -24,6 +27,7 @@ public interface Loader<K, V, P> {
      * @param param           A parameter received by the cache caller
      * @return Data fulfilling the requirements
      */
+    @Nonnull
     Result<V> loadForward(K key, long lowestIncluded, long highestExcluded, int offset, int limit, P param);
 
     /**
@@ -37,6 +41,7 @@ public interface Loader<K, V, P> {
      * @param param           A parameter received by the cache caller
      * @return Data fulfilling the requirements
      */
+    @Nonnull
     default Result<V> loadBackwards(K key, long lowestIncluded, long highestExcluded, int offset, int limit, P param) {
         throw new UnsupportedOperationException();
     }
@@ -52,6 +57,7 @@ public interface Loader<K, V, P> {
          *
          * @return The data
          */
+        @Nonnull
         Collection<V> getData();
 
         /**
@@ -73,10 +79,12 @@ public interface Loader<K, V, P> {
         protected final boolean isEndOfData;
 
         public StdResult(Collection<V> data, boolean isEndOfData) {
+            Objects.requireNonNull(data);
             this.data = data;
             this.isEndOfData = isEndOfData;
         }
 
+        @Nonnull
         @Override
         public Collection<V> getData() {
             return data;

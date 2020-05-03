@@ -1,4 +1,5 @@
 [![Build Status](https://travis-ci.com/fbaro/tcache.svg?branch=master)](https://travis-ci.com/fbaro/tcache)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
 # TCache
 A cache for time series data
@@ -51,7 +52,7 @@ With this design, all the cache entries are occupying a comparable amount of mem
 
 ## Requirements
 
-TCache depends on [guava](https://github.com/google/guava) for some collections-related classes, and on [Caffeine](https://github.com/ben-manes/caffeine) as the underlying cache implementation.
+TCache depends on [Caffeine](https://github.com/ben-manes/caffeine) as the underlying cache implementation.
 
 The timestamps in TCache are represented as long values. There can be more data points on the same timestamp, but too many of them will make the cache perform worse.
 

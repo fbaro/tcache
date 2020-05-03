@@ -5,6 +5,8 @@ import com.google.common.collect.Lists;
 import org.junit.Test;
 import org.junit.experimental.categories.Category;
 
+import javax.annotation.Nonnull;
+
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
@@ -29,6 +31,7 @@ public class TimestampedCacheTest {
             data.add(l * 100);
         }
         loader = new Loader<String, Long, Void>() {
+            @Nonnull
             @Override
             public Result<Long> loadForward(String key, long lowestIncluded, long highestExcluded, int offset, int limit, Void param) {
                 //System.out.println("loadForward key = [" + key + "], lowestIncluded = [" + lowestIncluded + "], highestExcluded = [" + highestExcluded + "], offset = [" + offset + "], limit = [" + limit + "], param = [" + param + "]");
@@ -36,6 +39,7 @@ public class TimestampedCacheTest {
                 return TimestampedCacheTest.this.loadFwd(lowestIncluded, highestExcluded, offset, limit);
             }
 
+            @Nonnull
             @Override
             public Result<Long> loadBackwards(String key, long lowestIncluded, long highestExcluded, int offset, int limit, Void param) {
                 //System.out.println("loadBackwards key = [" + key + "], lowestIncluded = [" + lowestIncluded + "], highestExcluded = [" + highestExcluded + "], offset = [" + offset + "], limit = [" + limit + "], param = [" + param + "]");

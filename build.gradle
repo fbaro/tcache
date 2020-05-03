@@ -12,9 +12,11 @@ repositories {
 }
 
 dependencies {
-    implementation 'com.github.ben-manes.caffeine:caffeine:2.8.1'
-    implementation 'com.google.guava:guava:28.2-jre'
+    api 'com.github.ben-manes.caffeine:caffeine:2.8.1'
+    api 'com.google.code.findbugs:jsr305:3.0.2'
+
     testCompile group: 'junit', name: 'junit', version: '4.12'
+    testCompile 'com.google.guava:guava:28.2-jre'
 }
 
 test {
