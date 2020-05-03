@@ -222,7 +222,7 @@ public class TimestampedCache<K, V, P> {
             }
 
             private void initChunk() {
-                curChunkIterator = curChunk.chunk.backIterator();
+                curChunkIterator = curChunk.backIterator();
                 for (int i = 0; i < curChunk.toSkip; i++) {
                     curChunkIterator.next();
                 }
@@ -468,7 +468,7 @@ public class TimestampedCache<K, V, P> {
                 int chunkEnd = Math.min(chunkSize, position);
 
                 boolean complete = chunkEnd < result.size() || endTimestamp <= resultEndTimestamp;
-                Chunk<V> chunk = Chunk.create(result.subList(0, chunkEnd), l - 1, complete, position > chunkSize, endOfData && chunkEnd == result.size());
+                Chunk<V> chunk = Chunk.create(result.subList(0, chunkEnd), l - 1, complete, position > chunkSize, endOfData && chunkEnd == result.size(), false);
                 cache.put(Key.asc(key, timestamp, chunkSeq), chunk);
                 result = result.subList(chunkEnd, result.size());
                 ret = (ret == null && chunkSeq == retChunkSeq ? chunk : ret);
@@ -487,7 +487,7 @@ public class TimestampedCache<K, V, P> {
                         // Il chunk e' completo se ho altri risultati oltre il suo termine,
                         // o se so che non ci sono altri dati oltre endTimestamp
                         boolean complete = chunkEnd < result.size() || endTimestamp <= resultEndTimestamp;
-                        Chunk<V> chunk = Chunk.create(result.subList(0, chunkEnd), s, complete, false, endOfData && chunkEnd == result.size());
+                        Chunk<V> chunk = Chunk.create(result.subList(0, chunkEnd), s, complete, false, endOfData && chunkEnd == result.size(), false);
                         cache.put(Key.asc(key, timestamp, 0), chunk);
                         result = result.subList(chunkEnd, result.size());
                         ret = (ret == null && 0 == retChunkSeq ? chunk : ret);
@@ -542,12 +542,12 @@ public class TimestampedCache<K, V, P> {
                     // o se so che non ci sono altri dati oltre startTs
                     boolean complete = sliceEnd < result.size() || startTs >= resultStartTimestamp;
                     if (complete) {
-                        Chunk<V> chunk = new Chunk<>(Lists.reverse(result.subList(0, sliceEnd)), s, true, false, false, endOfData && sliceEnd == result.size(), false);
+                        Chunk<V> chunk = Chunk.create(Lists.reverse(result.subList(0, sliceEnd)), s, true, false, false, endOfData && sliceEnd == result.size());
                         // TODO: Svuotare la pCache? Come?
                         cache.put(Key.asc(key, startTs, 0), chunk);
                         ret = (ret == null ? new GetBackResult<>(chunk, 0, 0) : ret);
                     } else {
-                        Chunk<V> chunk = new Chunk<>(result.subList(0, sliceEnd), s, false, false, false, endOfData && sliceEnd == result.size(), true);
+                        Chunk<V> chunk = Chunk.create(result.subList(0, sliceEnd), s, false, false, false, endOfData && sliceEnd == result.size());
                         cache.put(Key.desc(key, endTs, -1), chunk);
                         ret = (ret == null ? new GetBackResult<>(chunk, -1, 0) : ret);
                     }
@@ -566,7 +566,7 @@ public class TimestampedCache<K, V, P> {
                         for (int i = numChunks - 1; i >= 0; i--) {
                             int startIdx = i * chunkSize;
                             int endIdx = Math.min((i + 1) * chunkSize, sliceEnd);
-                            Chunk<V> chunk = new Chunk<>(sliceData.subList(startIdx, endIdx), s, true, i < numChunks - 1, false, endOfData && sliceEnd == result.size() && i == 0, false);
+                            Chunk<V> chunk = Chunk.create(sliceData.subList(startIdx, endIdx), s, true, i < numChunks - 1, false, endOfData && sliceEnd == result.size() && i == 0);
                             cache.put(Key.asc(key, startTs, i), chunk);
                             // Sto raddrizzando i dati, quindi devo restituire un chunk parecchio diverso da quello richiesto
                             // e se il raddrizzamento ha cambiato i "bordi" dei chunk devo riprendere da un certo indice
@@ -578,7 +578,7 @@ public class TimestampedCache<K, V, P> {
                         for (int i = 0; i < numChunks; i++) {
                             int startIdx = i * chunkSize;
                             int endIdx = Math.min((i + 1) * chunkSize, sliceEnd);
-                            Chunk<V> chunk = new Chunk<>(result.subList(startIdx, endIdx), s, i < numChunks - 1, i < numChunks - 1, false, endOfData && sliceEnd == result.size() && i == numChunks - 1, true);
+                            Chunk<V> chunk = Chunk.create(result.subList(startIdx, endIdx), s, i < numChunks - 1, i < numChunks - 1, false, endOfData && sliceEnd == result.size() && i == numChunks - 1);
                             cache.put(Key.desc(key, endTs, -i - 1), chunk);
                             ret = (ret == null && retChunkSeq == -i - 1 ? new GetBackResult<>(chunk, -i - 1, 0) : ret);
                         }
@@ -590,7 +590,7 @@ public class TimestampedCache<K, V, P> {
             }
         }
 
-        return ret != null ? ret : new GetBackResult<>(new Chunk<>(ImmutableList.of(), minSliceLevel(endTs), true, false, false, false, true), retChunkSeq, 0);
+        return ret != null ? ret : new GetBackResult<>(Chunk.empty(minSliceLevel(endTs), false, false), retChunkSeq, 0);
     }
 
     private int minSliceLevel(long timestamp) {
@@ -657,16 +657,14 @@ public class TimestampedCache<K, V, P> {
         private final boolean hasNextChunk;
         private final boolean endOfDataForward;
         private final boolean endOfDataBackwards;
-        private final boolean inverted; // TODO: Probabilmente si puo' togliere
 
-        Chunk(List<V> data, int sliceLevel, boolean complete, boolean hasNextChunk, boolean endOfDataForward, boolean endOfDataBackwards, boolean inverted) {
+        private Chunk(List<V> data, int sliceLevel, boolean complete, boolean hasNextChunk, boolean endOfDataForward, boolean endOfDataBackwards) {
             this.data = data;
             this.sliceLevel = sliceLevel;
             this.complete = complete;
             this.hasNextChunk = hasNextChunk;
             this.endOfDataForward = endOfDataForward;
             this.endOfDataBackwards = endOfDataBackwards;
-            this.inverted = inverted;
             if (data.isEmpty() && !complete) {
                 throw new IllegalStateException("Empty chunks must be complete; incomplete chunks must have some data");
             }
@@ -689,41 +687,18 @@ public class TimestampedCache<K, V, P> {
             return startTimestamp + slices[sliceLevel];
         }
 
-
         public CountingIterator<V> iterator() {
-            if (inverted) {
-                return CountingIterator.create(Lists.reverse(data).iterator());
-            } else {
-                return CountingIterator.create(data.iterator());
-            }
+            return CountingIterator.create(data.iterator());
         }
 
-        public CountingIterator<V> backIterator() {
-            if (!inverted) {
-                return CountingIterator.create(Lists.reverse(data).iterator());
-            } else {
-                return CountingIterator.create(data.iterator());
-            }
-        }
-
-        static <V> Chunk<V> create(List<V> data, int sliceLevel, boolean complete, boolean hasNextChunk, boolean endOfDataForward) {
+        static <V> Chunk<V> create(List<V> data, int sliceLevel, boolean complete, boolean hasNextChunk, boolean endOfDataForward, boolean endOfDataBackwards) {
             if (data.isEmpty()) {
                 if (!complete || hasNextChunk) {
                     throw new IllegalArgumentException("Cannot create empty+incomplete or empty+hasNext chunk");
                 }
-                return empty(sliceLevel, endOfDataForward, false);
+                return empty(sliceLevel, endOfDataForward, endOfDataBackwards);
             }
-            return new Chunk<>(data, sliceLevel, complete, hasNextChunk, endOfDataForward, false, false);
-        }
-
-        static <V> Chunk<V> createInverted(List<V> data, int sliceLevel, boolean complete, boolean hasNextChunk, boolean endOfDataBackwards) {
-            if (data.isEmpty()) {
-                if (!complete || hasNextChunk) {
-                    throw new IllegalArgumentException("Cannot create empty+incomplete or empty+hasNext chunk");
-                }
-                return new Chunk<>(ImmutableList.of(), sliceLevel, true, false, false, endOfDataBackwards, true);
-            }
-            return new Chunk<>(data, sliceLevel, complete, hasNextChunk, false, endOfDataBackwards, true);
+            return new Chunk<>(data, sliceLevel, complete, hasNextChunk, endOfDataForward, endOfDataBackwards);
         }
 
         static <V> Chunk<V> empty(int sliceLevel, boolean endOfDataForward, boolean endOfDataBackwards) {
@@ -731,7 +706,7 @@ public class TimestampedCache<K, V, P> {
                 //noinspection unchecked
                 return (Chunk<V>) EMPTY_CACHE.get(sliceLevel + 2 * EMPTY_CACHE_SIZE * (endOfDataForward ? 1 : 0) + EMPTY_CACHE_SIZE * (endOfDataBackwards ? 1 : 0));
             }
-            return new Chunk<>(ImmutableList.of(), sliceLevel, true, false, endOfDataForward, endOfDataBackwards, false);
+            return new Chunk<>(ImmutableList.of(), sliceLevel, true, false, endOfDataForward, endOfDataBackwards);
         }
 
         private static final int EMPTY_CACHE_SIZE = 32;
@@ -741,7 +716,7 @@ public class TimestampedCache<K, V, P> {
             for (boolean endOfDataForward : new boolean[]{false, true}) {
                 for (boolean endOfDataBackwards : new boolean[]{false, true}) {
                     for (int s = 0; s < EMPTY_CACHE_SIZE; s++) {
-                        EMPTY_CACHE.add(new Chunk<>(ImmutableList.of(), s, true, false, endOfDataForward, endOfDataBackwards, false));
+                        EMPTY_CACHE.add(new Chunk<>(ImmutableList.of(), s, true, false, endOfDataForward, endOfDataBackwards));
                     }
                 }
             }
@@ -763,7 +738,15 @@ public class TimestampedCache<K, V, P> {
             if (!chunk.complete) {
                 throw new IllegalStateException("Chunk is not complete, hasPrevChunk is not meaningful");
             }
-            return (chunk.inverted && chunk.hasNextChunk) || (!chunk.inverted && chunkSeq > 0);
+            return (chunkSeq < 0 && chunk.hasNextChunk) || chunkSeq > 0;
+        }
+
+        CountingIterator<V> backIterator() {
+            if (chunkSeq < 0) {
+                return CountingIterator.create(chunk.data.iterator());
+            } else {
+                return CountingIterator.create(Lists.reverse(chunk.data).iterator());
+            }
         }
     }
 
