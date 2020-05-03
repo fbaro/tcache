@@ -205,16 +205,15 @@ public class TimestampedCache<K, V, P> {
     public Iterator<V> getBackwards(K key, long lowestTimestamp, long highestTimestamp, P param) {
         return new AbstractIterator<V>() {
 
-            private long nextEndTimestamp;
-            private int nextChunkSeq;
+            private long curEndTimestamp;
             private GetBackResult<V> curChunk = null;
             private CountingIterator<V> curChunkIterator;
 
             private void init() {
                 for (long slice : slices) {
-                    nextEndTimestamp = slice + roundDown(highestTimestamp, slice);
-                    curChunk = getChunkBack(key, nextEndTimestamp, -1, param);
-                    if (nextEndTimestamp - slices[curChunk.chunk.sliceLevel] <= highestTimestamp) {
+                    curEndTimestamp = slice + roundDown(highestTimestamp, slice);
+                    curChunk = getChunkBack(key, curEndTimestamp, -1, param);
+                    if (curEndTimestamp - slices[curChunk.chunk.sliceLevel] <= highestTimestamp) {
                         initChunk();
                         return;
                     }
@@ -224,12 +223,6 @@ public class TimestampedCache<K, V, P> {
 
             private void initChunk() {
                 curChunkIterator = curChunk.chunk.backIterator();
-                if (curChunk.hasPrevChunk()) {
-                    nextChunkSeq = curChunk.chunkSeq - 1;
-                } else {
-                    nextEndTimestamp -= slices[curChunk.chunk.sliceLevel];
-                    nextChunkSeq = -1;
-                }
                 for (int i = 0; i < curChunk.toSkip; i++) {
                     curChunkIterator.next();
                 }
@@ -251,11 +244,20 @@ public class TimestampedCache<K, V, P> {
                         }
                     }
 
-                    if (curChunk.chunk.endOfDataBackwards || nextEndTimestamp <= lowestTimestamp) {
+                    if (curChunk.chunk.endOfDataBackwards) {
                         return endOfData();
                     }
-
-                    curChunk = getChunkBack(key, nextEndTimestamp, nextChunkSeq, param);
+                    int curChunkSeq;
+                    if (curChunk.hasPrevChunk()) {
+                        curChunkSeq = curChunk.chunkSeq - 1;
+                    } else {
+                        curEndTimestamp -= slices[curChunk.chunk.sliceLevel];
+                        curChunkSeq = -1;
+                    }
+                    if (curEndTimestamp <= lowestTimestamp) {
+                        return endOfData();
+                    }
+                    curChunk = getChunkBack(key, curEndTimestamp, curChunkSeq, param);
                     initChunk();
                 }
             }
@@ -636,7 +638,7 @@ public class TimestampedCache<K, V, P> {
         private final boolean hasNextChunk;
         private final boolean endOfDataForward;
         private final boolean endOfDataBackwards;
-        private final boolean inverted;
+        private final boolean inverted; // TODO: Probabilmente si puo' togliere
 
         Chunk(List<V> data, int sliceLevel, boolean complete, boolean hasNextChunk, boolean endOfDataForward, boolean endOfDataBackwards, boolean inverted) {
             this.data = data;
