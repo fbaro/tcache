@@ -3,13 +3,16 @@ package com.github.fbaro.tcache;
 import javax.annotation.Nonnull;
 
 import java.util.Collection;
+import java.util.Iterator;
 import java.util.Objects;
 
 /**
  * Interface to provide data to a cache.
+ * It is bad practice to hold references to the V instances returned by the methods in this interface.
  *
  * @param <K> Type of the keys in the cache. Should implement {@code hashCode} and {@code equals} as per the typical
- *            {@code Map} contract
+ *            {@code Map} contract; should be effectively immutable, or at any rate should not be changed once
+ *            it has been inserted into the cache.
  * @param <V> Type of the cache values
  * @param <P> Type of a custom parameter which will be passed as-is from the cache user to the loading function
  */
@@ -53,12 +56,12 @@ public interface Loader<K, V, P> {
      */
     interface Result<V> {
         /**
-         * The data resulting from the load. The collection should be sorted accordingly to the called method.
+         * The data resulting from the load, sorted by ascending or descending timestamp accordingly to the called method.
          *
          * @return The data
          */
         @Nonnull
-        Collection<V> getData();
+        Iterator<V> getData();
 
         /**
          * This method tells whether there is no more data past the returned data (in the direction
@@ -75,18 +78,24 @@ public interface Loader<K, V, P> {
      * @param <V> Type of the cache values
      */
     class StdResult<V> implements Result<V> {
-        protected final Collection<V> data;
+        protected final Iterator<V> data;
         protected final boolean isEndOfData;
 
-        public StdResult(Collection<V> data, boolean isEndOfData) {
+        public StdResult(Iterator<V> data, boolean isEndOfData) {
             Objects.requireNonNull(data);
             this.data = data;
             this.isEndOfData = isEndOfData;
         }
 
+        public StdResult(Collection<V> data, boolean isEndOfData) {
+            Objects.requireNonNull(data);
+            this.data = data.iterator();
+            this.isEndOfData = isEndOfData;
+        }
+
         @Nonnull
         @Override
-        public Collection<V> getData() {
+        public Iterator<V> getData() {
             return data;
         }
 

@@ -11,6 +11,7 @@ import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Objects;
+import java.util.function.Function;
 import java.util.function.ToLongFunction;
 
 /**
@@ -35,7 +36,8 @@ public class TimestampedCache<K, V, P> {
      * TODO: Integrare (o piu' probabilmente svuotare) i dati discendenti quando si fanno ricerche all'avanti
      */
     private final Cache<Key<K>, Chunk<V>> cache;
-    private final Loader<? super K, ? extends V, ? super P> loader;
+    private final Loader<? super K, V, ? super P> loader;
+    private final Function<? super V, ? extends V> cloner;
     private final ToLongFunction<? super V> timestamper;
 
     /**
@@ -46,18 +48,25 @@ public class TimestampedCache<K, V, P> {
      *                        size should be evenly divided by its next slice size.
      * @param timestamper     A function to assign timestamps to the data
      * @param loader          The cache loader, to retrieve data when it is not found in the cache
+     * @param cloner          A function to clone V instances. This is used to ensure that the items in the cache and the
+     *                        items returned by the iterators are not the same items, and therefore to ensure that
+     *                        the cache contents cannot be unwittingly changed. The cloner will also be used with for
+     *                        the same reason on items returned by the Loader. It can be set as the identity function
+     *                        if these burden is taken care of by the caller.
      * @param caffeineBuilder An Caffeine cache builder, appropriately configured to build the underlying Caffeine cache
      */
     public TimestampedCache(
             int chunkSize,
             @Nonnull long[] slices,
             @Nonnull ToLongFunction<? super V> timestamper,
-            @Nonnull Loader<? super K, ? extends V, ? super P> loader,
-            @Nonnull Caffeine<Object, Object> caffeineBuilder) { // TODO: Pensare meglio al builder, chiarire come si usa, occhio alla firma
+            @Nonnull Loader<? super K, V, ? super P> loader,
+            @Nonnull Function<? super V, ? extends V> cloner,
+            @Nonnull Caffeine<? super Key<K>, ? super Chunk<V>> caffeineBuilder) {
         this.chunkSize = chunkSize;
         this.slices = Arrays.copyOf(slices, slices.length);
         this.timestamper = timestamper;
         this.loader = loader;
+        this.cloner = cloner;
         this.cache = caffeineBuilder.build();
         for (int i = 1; i < slices.length; i++) {
             if (slices[i - 1] <= slices[i] || slices[i - 1] % slices[i] != 0) {
@@ -67,7 +76,8 @@ public class TimestampedCache<K, V, P> {
     }
 
     /**
-     * Constructs a new, empty TimestampedCache instance, with the default Caffeine configuration.
+     * Constructs a new, empty TimestampedCache instance, with the default Caffeine configuration, and the identity
+     * function as cloner.
      *
      * @param chunkSize   The maximum size of each chunk of data stored in the cache.
      * @param slices      The size of the timestamp slices. The array must be sorted in descending order. Each slice
@@ -75,8 +85,8 @@ public class TimestampedCache<K, V, P> {
      * @param timestamper A function to assign timestamps to the data
      * @param loader      The cache loader, to retrieve data when it is not found in the cache
      */
-    public TimestampedCache(int chunkSize, @Nonnull long[] slices, @Nonnull ToLongFunction<? super V> timestamper, @Nonnull Loader<? super K, ? extends V, ? super P> loader) {
-        this(chunkSize, slices, timestamper, loader, Caffeine.newBuilder());
+    public TimestampedCache(int chunkSize, @Nonnull long[] slices, @Nonnull ToLongFunction<? super V> timestamper, @Nonnull Loader<? super K, V, ? super P> loader) {
+        this(chunkSize, slices, timestamper, loader, x -> x, Caffeine.newBuilder());
     }
 
     /**
@@ -146,7 +156,7 @@ public class TimestampedCache<K, V, P> {
                             if (retTs >= highestTimestamp) {
                                 return endOfData();
                             } else if (retTs >= lowestTimestamp) {
-                                return ret;
+                                return cloner.apply(ret);
                             }
                         }
                     }
@@ -240,7 +250,7 @@ public class TimestampedCache<K, V, P> {
                             if (retTs <= lowestTimestamp) {
                                 return endOfData();
                             } else if (retTs <= highestTimestamp) {
-                                return ret;
+                                return cloner.apply(ret);
                             }
                         }
                     }
@@ -338,14 +348,16 @@ public class TimestampedCache<K, V, P> {
             long lastTs = timestamper.applyAsLong(lResult.get(lResult.size() - 1));
             int lastIdx = binarySearch(lResult, timestamper, lastTs);
             long highestExcluded = lastTs + slices[0];
-            Loader.Result<? extends V> result = loader.loadForward(key, lastTs, highestExcluded, lResult.size() - lastIdx, chunkSize + 1, param);
-            lResult.addAll(result.getData());
-            long resultEndTs = result.getData().size() == chunkSize + 1 ? timestamper.applyAsLong(lResult.get(lResult.size() - 1)) : highestExcluded;
+            Loader.Result<V> result = loader.loadForward(key, lastTs, highestExcluded, lResult.size() - lastIdx, chunkSize + 1, param);
+            int preSize = lResult.size();
+            CloningIterator.from(result.getData(), cloner).forEachRemaining(lResult::add);
+            int resultSize = lResult.size() - preSize;
+            long resultEndTs = resultSize == chunkSize + 1 ? timestamper.applyAsLong(lResult.get(lResult.size() - 1)) : highestExcluded;
             return arrangeFwd(key, timestamp, chunkSeq, resultEndTs, ImmutableList.copyOf(lResult), result.isEndOfData());
         }
-        Loader.Result<? extends V> result = loader.loadForward(key, timestamp, timestamp + slices[0], 0, chunkSize + 1, param);
-        ImmutableList<V> lResult = ImmutableList.copyOf(result.getData());
-        long resultEndTs = result.getData().size() == chunkSize + 1 ? timestamper.applyAsLong(lResult.get(lResult.size() - 1)) : timestamp + slices[0];
+        Loader.Result<V> result = loader.loadForward(key, timestamp, timestamp + slices[0], 0, chunkSize + 1, param);
+        ImmutableList<V> lResult = ImmutableList.copyOf(CloningIterator.from(result.getData(), cloner));
+        long resultEndTs = lResult.size() == chunkSize + 1 ? timestamper.applyAsLong(lResult.get(lResult.size() - 1)) : timestamp + slices[0];
         return arrangeFwd(key, timestamp, 0, resultEndTs, lResult, result.isEndOfData());
     }
 
@@ -417,18 +429,20 @@ public class TimestampedCache<K, V, P> {
         if (chunkUnion.isEmpty()) {
             checkState(chunkSeq == -1);
             // I dati mancano completamente
-            Loader.Result<? extends V> result = loader.loadBackwards(key, endTs - slices[0], endTs, 0, chunkSize + 1, param);
-            ImmutableList<V> lResult = ImmutableList.copyOf(result.getData());
-            long resultStartTs = result.getData().size() == chunkSize + 1 ? timestamper.applyAsLong(lResult.get(lResult.size() - 1)) : endTs - slices[0];
+            Loader.Result<V> result = loader.loadBackwards(key, endTs - slices[0], endTs, 0, chunkSize + 1, param);
+            ImmutableList<V> lResult = ImmutableList.copyOf(CloningIterator.from(result.getData(), cloner));
+            long resultStartTs = lResult.size() == chunkSize + 1 ? timestamper.applyAsLong(lResult.get(lResult.size() - 1)) : endTs - slices[0];
             return arrangeBack(key, endTs, -1, resultStartTs, lResult, result.isEndOfData());
         } else {
             // Completo i dati parziali facendo un'altra load all'indietro
             long lastTs = timestamper.applyAsLong(chunkUnion.get(chunkUnion.size() - 1));
             int lastTsFirstIdx = binarySearchBack(chunkUnion, timestamper, lastTs);
             long loadEndTs = (lastTsFirstIdx == 0 ? endTs : timestamper.applyAsLong(chunkUnion.get(lastTsFirstIdx - 1)));
-            Loader.Result<? extends V> result = loader.loadBackwards(key, loadEndTs - slices[0], loadEndTs, chunkUnion.size() - lastTsFirstIdx, chunkSize + 1, param);
-            chunkUnion.addAll(result.getData());
-            long resultStartTs = result.getData().size() == chunkSize + 1 ? timestamper.applyAsLong(chunkUnion.get(chunkUnion.size() - 1)) : endTs - slices[0];
+            Loader.Result<V> result = loader.loadBackwards(key, loadEndTs - slices[0], loadEndTs, chunkUnion.size() - lastTsFirstIdx, chunkSize + 1, param);
+            int preSize = chunkUnion.size();
+            CloningIterator.from(result.getData(), cloner).forEachRemaining(chunkUnion::add);
+            int resultSize = chunkUnion.size() - preSize;
+            long resultStartTs = resultSize == chunkSize + 1 ? timestamper.applyAsLong(chunkUnion.get(chunkUnion.size() - 1)) : endTs - slices[0];
             return arrangeBack(key, endTs, chunkSeq, resultStartTs, ImmutableList.copyOf(chunkUnion), result.isEndOfData());
         }
     }
@@ -654,7 +668,7 @@ public class TimestampedCache<K, V, P> {
      *
      * @param <V> The data type
      */
-    private static final class Chunk<V> {
+    public static final class Chunk<V> {
         private final ImmutableList<V> data;
         private final int sliceLevel;
         private final boolean complete;
@@ -687,16 +701,27 @@ public class TimestampedCache<K, V, P> {
             return hasNextChunk;
         }
 
-        public long getEndTimestamp(long startTimestamp, long[] slices) {
+        long getEndTimestamp(long startTimestamp, long[] slices) {
             return startTimestamp + slices[sliceLevel];
         }
 
-        public CountingIterator<V> iterator() {
+        CountingIterator<V> iterator() {
             return CountingIterator.create(data.iterator());
         }
 
-        public CountingIterator<V> reverseIterator() {
+        CountingIterator<V> reverseIterator() {
             return CountingIterator.create(data.reverseIterator());
+        }
+
+        /**
+         * Retrieves the data contained by this Chunk. The returned List is immutable. It is bad practice to
+         * change the content of the list elements.
+         *
+         * @return The data contained in this cache Chunk
+         */
+        @Nonnull
+        public List<V> getData() {
+            return data;
         }
 
         static <V> Chunk<V> create(ImmutableList<V> data, int sliceLevel, boolean complete, boolean hasNextChunk, boolean endOfDataForward, boolean endOfDataBackwards) {
@@ -758,13 +783,18 @@ public class TimestampedCache<K, V, P> {
         }
     }
 
-    private static final class Key<K> {
+    /**
+     * This data structure wraps one "external" key, associating internal data to it.
+     *
+     * @param <K> The TimestampedCache key type
+     */
+    public static final class Key<K> {
         private final boolean ascending;
         private final K key;
         private final long ts;
         private final int chunkSeq;
 
-        Key(boolean ascending, K key, long ts, int chunkSeq) {
+        private Key(boolean ascending, K key, long ts, int chunkSeq) {
             this.ascending = ascending;
             this.key = key;
             this.ts = ts;
@@ -797,11 +827,39 @@ public class TimestampedCache<K, V, P> {
                     '}';
         }
 
-        public static <K> Key<K> asc(K key, long ts, int chunkSeq) {
+        /**
+         * Retrieves the underlying key value
+         *
+         * @return The key value
+         */
+        public K getKey() {
+            return key;
+        }
+
+        /**
+         * Retrieves the timestamp this key represents. It is the minimum timestamp of the chunk if the key is
+         * ascending, or the maximum if the key is descending
+         *
+         * @return The key timestamp
+         */
+        public long getTimestamp() {
+            return ts;
+        }
+
+        /**
+         * Determines the direction of the data associated with this Key
+         *
+         * @return {@code true} if the data is ascending, {@code false} if it is descending
+         */
+        public boolean isAscending() {
+            return ascending;
+        }
+
+        static <K> Key<K> asc(K key, long ts, int chunkSeq) {
             return new Key<>(true, key, ts, chunkSeq);
         }
 
-        public static <K> Key<K> desc(K key, long ts, int chunkSeq) {
+        static <K> Key<K> desc(K key, long ts, int chunkSeq) {
             return new Key<>(false, key, ts, chunkSeq);
         }
     }

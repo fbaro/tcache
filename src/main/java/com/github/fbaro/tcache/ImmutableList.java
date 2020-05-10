@@ -40,6 +40,21 @@ abstract class ImmutableList<E> extends AbstractList<E> {
         }
     }
 
+    public static <E> ImmutableList<E> copyOf(Iterator<? extends E> data) {
+        if (!data.hasNext()) {
+            return of();
+        }
+        E first = data.next();
+        if (!data.hasNext()) {
+            return of(first);
+        }
+        ArrayList<E> copiedData = new ArrayList<>();
+        copiedData.add(first);
+        data.forEachRemaining(copiedData::add);
+        copiedData.trimToSize();
+        return new Sublist<>(copiedData, 0, copiedData.size());
+    }
+
     private static final ImmutableList<Object> EMPTY = new ImmutableList<Object>() {
         @Override
         public Object get(int index) {

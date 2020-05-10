@@ -50,13 +50,17 @@ public class TimestampedCacheTest {
     }
 
     private Loader.Result<Long> loadFwd(long lowestIncluded, long highestExcluded, int offset, int limit) {
-        List<Long> ret = data.stream()
+        List<Long> ret = getFwd(lowestIncluded, highestExcluded, offset, limit);
+        return new Loader.StdResult<>(ret, data.isEmpty() || (ret.size() < limit && highestExcluded > data.get(data.size() - 1)));
+    }
+
+    private List<Long> getFwd(long lowestIncluded, long highestExcluded, int offset, int limit) {
+        return data.stream()
                 .filter(l -> l >= lowestIncluded)
                 .filter(l -> l < highestExcluded)
                 .skip(offset)
                 .limit(limit)
                 .collect(Collectors.toList());
-        return new Loader.StdResult<>(ret, data.isEmpty() || (ret.size() < limit && highestExcluded > data.get(data.size() - 1)));
     }
 
     private Loader.Result<Long> loadBkw(long lowestIncluded, long highestExcluded, int offset, int limit) {
@@ -315,7 +319,7 @@ public class TimestampedCacheTest {
         } catch (RuntimeException ex) {
             throw new AssertionError("Error at chunk size " + cache.getChunkSize() + " start = " + start + " end = " + end + " data = " + data, ex);
         }
-        assertEquals("Error at chunk size " + cache.getChunkSize() + " start = " + start + " end = " + end + " data = " + data, loadFwd(start, end, 0, 1000).getData(), result);
+        assertEquals("Error at chunk size " + cache.getChunkSize() + " start = " + start + " end = " + end + " data = " + data, getFwd(start, end, 0, 1000), result);
     }
 
     private void back(long[] chunks, int chunkSize, long start, long end) {
