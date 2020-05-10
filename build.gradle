@@ -1,6 +1,17 @@
+buildscript {
+    repositories {
+        jcenter()
+    }
+    dependencies {
+        classpath 'com.bmuschko:gradle-nexus-plugin:2.3.1'
+    }
+}
+
 plugins {
     id 'java-library'
 }
+
+apply plugin: 'com.bmuschko.nexus'
 
 group 'com.github.fbaro'
 version '1.0.0'
@@ -32,4 +43,34 @@ task slowTest(type: Test) {
     testClassesDirs = sourceSets.test.output.classesDirs
     classpath = sourceSets.test.runtimeClasspath
     shouldRunAfter test
+}
+
+modifyPom {
+    project {
+        name 'tcache'
+        description 'A cache for time series data'
+        url 'https://github.com/fbaro/tcache'
+        inceptionYear '2020'
+
+        scm {
+            url 'https://github.com/fbaro/tcache'
+            connection 'scm:git:https://github.com/fbaro/tcache.git'
+            developerConnection 'scm:git:git@github.com:fbaro/tcache.git'
+        }
+
+        licenses {
+            license {
+                name 'GNU LESSER GENERAL PUBLIC LICENSE, Version 3'
+                url 'https://www.gnu.org/licenses/lgpl-3.0.txt'
+            }
+        }
+
+        developers {
+            developer {
+                id 'fbaro'
+                name 'Flavio Baronti'
+                email 'f.baro@libero.it'
+            }
+        }
+    }
 }

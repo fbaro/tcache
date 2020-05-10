@@ -654,8 +654,8 @@ public class TimestampedCache<K, V, P> {
     /**
      * Holds a chunk of data.
      * complete = true: data contains the full data for this timestamp and slice level
-     * complete = false && data.size < chunkSize: this chunk was loaded only partially
-     * complete = false && data.size == chunkSize: this chunk is complete, but there is
+     * complete = false &amp;&amp; data.size &lt; chunkSize: this chunk was loaded only partially
+     * complete = false &amp;&amp; data.size == chunkSize: this chunk is complete, but there is
      * more data in the next chunkSeq.
      *
      * @param <V> The data type
