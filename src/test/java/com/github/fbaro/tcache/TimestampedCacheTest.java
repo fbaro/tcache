@@ -33,28 +33,28 @@ public class TimestampedCacheTest {
         loader = new Loader<String, Long, Void>() {
             @Nonnull
             @Override
-            public Result<Long> loadForward(String key, long lowestIncluded, long highestExcluded, int offset, int limit, Void param) {
-                //System.out.println("loadForward key = [" + key + "], lowestIncluded = [" + lowestIncluded + "], highestExcluded = [" + highestExcluded + "], offset = [" + offset + "], limit = [" + limit + "], param = [" + param + "]");
+            public Result<Long> loadAscending(String key, long lowestIncluded, long highestExcluded, int offset, int limit, Void param) {
+                //System.out.println("loadAscending key = [" + key + "], lowestIncluded = [" + lowestIncluded + "], highestExcluded = [" + highestExcluded + "], offset = [" + offset + "], limit = [" + limit + "], param = [" + param + "]");
                 loadCount++;
-                return TimestampedCacheTest.this.loadFwd(lowestIncluded, highestExcluded, offset, limit);
+                return TimestampedCacheTest.this.loadAsc(lowestIncluded, highestExcluded, offset, limit);
             }
 
             @Nonnull
             @Override
-            public Result<Long> loadBackwards(String key, long lowestIncluded, long highestExcluded, int offset, int limit, Void param) {
-                //System.out.println("loadBackwards key = [" + key + "], lowestIncluded = [" + lowestIncluded + "], highestExcluded = [" + highestExcluded + "], offset = [" + offset + "], limit = [" + limit + "], param = [" + param + "]");
+            public Result<Long> loadDescending(String key, long lowestIncluded, long highestExcluded, int offset, int limit, Void param) {
+                //System.out.println("loadDescending key = [" + key + "], lowestIncluded = [" + lowestIncluded + "], highestExcluded = [" + highestExcluded + "], offset = [" + offset + "], limit = [" + limit + "], param = [" + param + "]");
                 loadCount++;
-                return TimestampedCacheTest.this.loadBkw(lowestIncluded, highestExcluded, offset, limit);
+                return TimestampedCacheTest.this.loadDesc(lowestIncluded, highestExcluded, offset, limit);
             }
         };
     }
 
-    private Loader.Result<Long> loadFwd(long lowestIncluded, long highestExcluded, int offset, int limit) {
-        List<Long> ret = getFwd(lowestIncluded, highestExcluded, offset, limit);
+    private Loader.Result<Long> loadAsc(long lowestIncluded, long highestExcluded, int offset, int limit) {
+        List<Long> ret = getAsc(lowestIncluded, highestExcluded, offset, limit);
         return new Loader.StdResult<>(ret, data.isEmpty() || (ret.size() < limit && highestExcluded > data.get(data.size() - 1)));
     }
 
-    private List<Long> getFwd(long lowestIncluded, long highestExcluded, int offset, int limit) {
+    private List<Long> getAsc(long lowestIncluded, long highestExcluded, int offset, int limit) {
         return data.stream()
                 .filter(l -> l >= lowestIncluded)
                 .filter(l -> l < highestExcluded)
@@ -63,7 +63,7 @@ public class TimestampedCacheTest {
                 .collect(Collectors.toList());
     }
 
-    private Loader.Result<Long> loadBkw(long lowestIncluded, long highestExcluded, int offset, int limit) {
+    private Loader.Result<Long> loadDesc(long lowestIncluded, long highestExcluded, int offset, int limit) {
         List<Long> ret = Lists.reverse(data).stream()
                 .filter(l -> l >= lowestIncluded)
                 .filter(l -> l < highestExcluded)
@@ -102,13 +102,13 @@ public class TimestampedCacheTest {
     }
 
     @Test
-    public void verifyCustomBinarySearchBackwardsWorks() {
+    public void verifyCustomBinarySearchDescendingWorks() {
         ImmutableList<Long> data0 = ImmutableList.of(10L, 8L, 6L, 4L, 2L);
         for (int i = 0; i < 5; i++) {
-            assertEquals(i, TimestampedCache.binarySearchBack(data0, v -> v, 10L - 2 * i));
+            assertEquals(i, TimestampedCache.binarySearchDesc(data0, v -> v, 10L - 2 * i));
         }
         for (int i = -1; i >= -6; i--) {
-            assertEquals(i, TimestampedCache.binarySearchBack(data0, v -> v, 13L + 2 * i));
+            assertEquals(i, TimestampedCache.binarySearchDesc(data0, v -> v, 13L + 2 * i));
         }
     }
 
@@ -120,7 +120,7 @@ public class TimestampedCacheTest {
             for (long start = 0; start < 1000; start += 25) {
                 for (long end = start + 100; end < start + 500; end += 25) {
                     test(chunks, chunkSize, start, end);
-                    back(chunks, chunkSize, start, end);
+                    desc(chunks, chunkSize, start, end);
                 }
             }
         }
@@ -130,13 +130,13 @@ public class TimestampedCacheTest {
     public void verifyWithChunking() {
         long[] chunks = {4000, 2000, 1000};
         test(chunks, 4, 0, 425); // If a specific combination fails, test it here
-        back(chunks, 6, 0, 1000);
+        desc(chunks, 6, 0, 1000);
 
         for (int chunkSize = 4; chunkSize < 55; chunkSize++) {
             for (long start = 0; start < 1500; start += 25) {
                 for (long end = start + 100; end < start + 1250; end += 25) {
                     test(chunks, chunkSize, start, end);
-                    back(chunks, chunkSize, start, end);
+                    desc(chunks, chunkSize, start, end);
                 }
             }
         }
@@ -150,7 +150,7 @@ public class TimestampedCacheTest {
             for (long start = 0; start < 1500; start += 25) {
                 for (long end = start + 100; end < start + 1250; end += 25) {
                     test(chunks, chunkSize, start, end);
-                    back(chunks, chunkSize, start, end);
+                    desc(chunks, chunkSize, start, end);
                 }
             }
         }
@@ -164,7 +164,7 @@ public class TimestampedCacheTest {
             for (long start = 0; start < 1500; start += 25) {
                 for (long end = start + 100; end < start + 1250; end += 25) {
                     test(chunks, chunkSize, start, end);
-                    back(chunks, chunkSize, start, end);
+                    desc(chunks, chunkSize, start, end);
                 }
             }
         }
@@ -184,7 +184,7 @@ public class TimestampedCacheTest {
             for (long start = 0; start < 1500; start += 25) {
                 for (long end = start + 100; end < start + 1250; end += 25) {
                     test(chunks, chunkSize, start, end);
-                    back(chunks, chunkSize, start, end);
+                    desc(chunks, chunkSize, start, end);
                 }
             }
         }
@@ -204,8 +204,8 @@ public class TimestampedCacheTest {
     }
 
     @Test
-    public void verifyDoesNotLoadTwoFullSlicesToAnswerRequestWithPartiallyLoadedChunkBackwards() {
-        back(new long[]{5000, 1000}, 4, 4500, 4900);
+    public void verifyDoesNotLoadTwoFullSlicesToAnswerRequestWithPartiallyLoadedChunkDescending() {
+        desc(new long[]{5000, 1000}, 4, 4500, 4900);
         assertEquals(1, loadCount);
     }
 
@@ -216,9 +216,9 @@ public class TimestampedCacheTest {
         test(new long[]{1000}, 20, 10000, 20000);
         assertEquals(2, loadCount);
 
-        back(new long[]{1000}, 20, -10000, 500);
+        desc(new long[]{1000}, 20, -10000, 500);
         assertEquals(3, loadCount);
-        back(new long[]{1000}, 20, -20000, -10000);
+        desc(new long[]{1000}, 20, -20000, -10000);
         assertEquals(4, loadCount);
     }
 
@@ -243,22 +243,22 @@ public class TimestampedCacheTest {
     }
 
     @Test
-    public void verifyDoubleBackwardsLoading() {
+    public void verifyDoubleDescendingLoading() {
         // Tengo un iteratore aperto e parzialmente avanzato
         // Con un altro iteratore carico quello che vorrebbe il primo
         // Voglio che il raddrizzamento non mi causi una doppia load
         TimestampedCache<String, Long, Void> cache = new TimestampedCache<>(4, new long[]{5000, 1000}, v -> v, loader);
-        Iterator<Long> backIt = cache.getBackwards("", 1000, 1900, null);
+        Iterator<Long> descIt = cache.getDescending("", 1000, 1900, null);
         for (int i = 0; i < 4; i++) {
-            assertEquals(1900L - i * 100, backIt.next().longValue());
+            assertEquals(1900L - i * 100, descIt.next().longValue());
         }
-        back(cache, 1000, 1900);
+        desc(cache, 1000, 1900);
         int lc = loadCount;
         for (int i = 4; i < 9; i++) {
-            assertEquals(1900L - i * 100, backIt.next().longValue());
+            assertEquals(1900L - i * 100, descIt.next().longValue());
         }
         assertEquals(lc, loadCount);
-        back(cache, 1000, 1900);
+        desc(cache, 1000, 1900);
         assertEquals(lc, loadCount);
     }
 
@@ -289,14 +289,14 @@ public class TimestampedCacheTest {
                             test(cache, start, end);
                             break;
                         case 1:
-                            back(cache, start, end);
+                            desc(cache, start, end);
                             break;
                         case 2:
                             test(cache, start, end);
-                            back(cache, start, end);
+                            desc(cache, start, end);
                             break;
                         case 3:
-                            back(cache, start, end);
+                            desc(cache, start, end);
                             test(cache, start, end);
                             break;
                     }
@@ -311,27 +311,27 @@ public class TimestampedCacheTest {
     }
 
     private void test(TimestampedCache<String, Long, Void> cache, long start, long end) {
-        //System.out.println("Forward start = [" + start + "], end = [" + end + "]");
+        //System.out.println("Ascending start = [" + start + "], end = [" + end + "]");
         List<Long> result = new ArrayList<>();
         try {
-            cache.getForward("", start, end, null)
+            cache.getAscending("", start, end, null)
                     .forEachRemaining(result::add);
         } catch (RuntimeException ex) {
             throw new AssertionError("Error at chunk size " + cache.getChunkSize() + " start = " + start + " end = " + end + " data = " + data, ex);
         }
-        assertEquals("Error at chunk size " + cache.getChunkSize() + " start = " + start + " end = " + end + " data = " + data, getFwd(start, end, 0, 1000), result);
+        assertEquals("Error at chunk size " + cache.getChunkSize() + " start = " + start + " end = " + end + " data = " + data, getAsc(start, end, 0, 1000), result);
     }
 
-    private void back(long[] chunks, int chunkSize, long start, long end) {
+    private void desc(long[] chunks, int chunkSize, long start, long end) {
         TimestampedCache<String, Long, Void> cache = new TimestampedCache<>(chunkSize, chunks, v -> v, loader);
-        back(cache, start, end);
+        desc(cache, start, end);
     }
 
-    private void back(TimestampedCache<String, Long, Void> cache, long start, long end) {
-        //System.out.println("Backwards start = [" + start + "], end = [" + end + "]");
+    private void desc(TimestampedCache<String, Long, Void> cache, long start, long end) {
+        //System.out.println("Descending start = [" + start + "], end = [" + end + "]");
         List<Long> result = new ArrayList<>();
         try {
-            cache.getBackwards("", start, end, null)
+            cache.getDescending("", start, end, null)
                     .forEachRemaining(result::add);
         } catch (RuntimeException ex) {
             throw new AssertionError("Error at chunk size " + cache.getChunkSize() + " start = " + start + " end = " + end + " data = " + data, ex);

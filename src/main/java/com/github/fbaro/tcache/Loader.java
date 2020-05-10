@@ -31,7 +31,7 @@ public interface Loader<K, V, P> {
      * @return Data fulfilling the requirements
      */
     @Nonnull
-    Result<V> loadForward(K key, long lowestIncluded, long highestExcluded, int offset, int limit, P param);
+    Result<V> loadAscending(K key, long lowestIncluded, long highestExcluded, int offset, int limit, P param);
 
     /**
      * Retrieves data in descending order.
@@ -45,7 +45,7 @@ public interface Loader<K, V, P> {
      * @return Data fulfilling the requirements
      */
     @Nonnull
-    default Result<V> loadBackwards(K key, long lowestIncluded, long highestExcluded, int offset, int limit, P param) {
+    default Result<V> loadDescending(K key, long lowestIncluded, long highestExcluded, int offset, int limit, P param) {
         throw new UnsupportedOperationException();
     }
 
