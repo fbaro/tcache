@@ -73,7 +73,8 @@ public class TimestampedCacheTest {
         return new Loader.StdResult<>(ret, data.isEmpty() || (ret.size() < limit && lowestIncluded <= data.get(0)));
     }
 
-    private List<Long> getBkw(long lowestExcluded, long highestIncluded, int offset, int limit) {
+    @SuppressWarnings("SameParameterValue")
+    private List<Long> getDesc(long lowestExcluded, long highestIncluded, int offset, int limit) {
         return Lists.reverse(data).stream()
                 .filter(l -> l > lowestExcluded)
                 .filter(l -> l <= highestIncluded)
@@ -272,9 +273,9 @@ public class TimestampedCacheTest {
             Random rnd = new Random(seed);
             double addProbability = rnd.nextDouble();
             data.clear();
-            for (int i = 0; i < dataBackup.size(); i++) {
+            for (Long aLong : dataBackup) {
                 if (rnd.nextDouble() <= addProbability) {
-                    data.add(dataBackup.get(i));
+                    data.add(aLong);
                 }
             }
 
@@ -336,6 +337,6 @@ public class TimestampedCacheTest {
         } catch (RuntimeException ex) {
             throw new AssertionError("Error at chunk size " + cache.getChunkSize() + " start = " + start + " end = " + end + " data = " + data, ex);
         }
-        assertEquals("Error at chunk size " + cache.getChunkSize() + " start = " + start + " end = " + end + " data = " + data, getBkw(start, end, 0, 1000), result);
+        assertEquals("Error at chunk size " + cache.getChunkSize() + " start = " + start + " end = " + end + " data = " + data, getDesc(start, end, 0, 1000), result);
     }
 }

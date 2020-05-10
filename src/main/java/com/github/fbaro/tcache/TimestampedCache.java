@@ -361,13 +361,7 @@ public class TimestampedCache<K, V, P> {
         return arrangeAsc(key, timestamp, 0, resultEndTs, lResult, result.isEndOfData());
     }
 
-    /**
-     * Cerca il chunk che termina con il timestamp indicato, se e' gia' in cache.
-     * Se non c'e', ritorna {@code null}.
-     *
-     * @param endTs Il timestamp di fine del chunk da cercare
-     * @return Un chunk, o {@code null}
-     */
+    @Nonnull
     private DescendingResult<V> getChunkDesc(K key, long endTs, int chunkSeq, boolean mustBeComplete, P param) {
         // Da fuori ho gia' iniziato a scorrere i chunk in avanti: continuo sulla cache standard
         if (chunkSeq >= 0) {
@@ -376,8 +370,7 @@ public class TimestampedCache<K, V, P> {
         }
 
         // Non ho info specifiche: provo a cercare nella cache in avanti
-        int l = slices.length;
-        for (int s = l - 1; s >= minSliceLevel(endTs); s--) {
+        for (int s = slices.length - 1; s >= minSliceLevel(endTs); s--) {
             long startTs = endTs - slices[s];
             int nc = 0; // Number of loaded chunks
             @Nullable Chunk<V> chunk;
@@ -419,8 +412,7 @@ public class TimestampedCache<K, V, P> {
         List<V> chunkUnion = new ArrayList<>();
         for (int i = -1; i > chunkSeq; i--) {
             DescendingResult<V> chunkDesc = getChunkDesc(key, endTs, i, true, param);
-            checkState(chunkDesc.chunkSeq == i); // TODO: Problema di concorrenza?
-            chunkUnion.addAll(chunkDesc.chunk.data);
+            chunkUnion.addAll(chunkDesc.chunk.data.subList(chunkDesc.toSkip, chunkDesc.chunk.data.size()));
         }
         if (pChunk != null) {
             chunkUnion.addAll(pChunk.data);
