@@ -72,6 +72,7 @@ abstract class ImmutableList<E> extends AbstractList<E> {
         }
 
         @Override
+        @Nonnull
         public Iterator<Object> iterator() {
             return Collections.emptyIterator();
         }
@@ -120,6 +121,7 @@ abstract class ImmutableList<E> extends AbstractList<E> {
         }
 
         @Override
+        @Nonnull
         public Iterator<E> iterator() {
             return value.iterator();
         }
@@ -171,6 +173,7 @@ abstract class ImmutableList<E> extends AbstractList<E> {
         }
 
         @Override
+        @Nonnull
         public Iterator<E> iterator() {
             return new Iterator<E>() {
                 private int pos = from;
@@ -234,7 +237,7 @@ abstract class ImmutableList<E> extends AbstractList<E> {
 
         @Override
         public E get(int index) {
-            return data.get(data.size() - index);
+            return data.get(data.size() - index - 1);
         }
 
         @Override
@@ -248,6 +251,7 @@ abstract class ImmutableList<E> extends AbstractList<E> {
         }
 
         @Override
+        @Nonnull
         public Iterator<E> iterator() {
             return data.reverseIterator();
         }
