@@ -9,6 +9,12 @@ public class CountingIterator<T> implements Iterator<T> {
 
     private CountingIterator(Iterator<T> delegate) {
         this.delegate = delegate;
+        this.count = 0;
+    }
+
+    private CountingIterator(Iterator<T> delegate, int initialCount) {
+        this.delegate = delegate;
+        this.count = initialCount;
     }
 
     @Override
@@ -34,5 +40,9 @@ public class CountingIterator<T> implements Iterator<T> {
 
     public static <T> CountingIterator<T> create(Iterator<T> delegate) {
         return new CountingIterator<>(delegate);
+    }
+
+    public static <T> CountingIterator<T> create(Iterator<T> delegate, int initialCount) {
+        return new CountingIterator<>(delegate, initialCount);
     }
 }

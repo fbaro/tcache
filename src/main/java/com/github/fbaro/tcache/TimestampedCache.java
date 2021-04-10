@@ -10,6 +10,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
+import java.util.ListIterator;
 import java.util.Objects;
 import java.util.function.Function;
 import java.util.function.ToLongFunction;
@@ -135,16 +136,15 @@ public class TimestampedCache<K, V, P> {
                 for (long slice : slices) {
                     curTimestamp = roundDown(lowestTimestamp, slice);
                     curChunk = getChunkAsc(key, curTimestamp, 0, false, param);
-                    if (curChunk.getEndTimestamp(curTimestamp, slices) >= lowestTimestamp) {
-                        if (curChunk.complete || curChunk.getMaxTimestamp(timestamper) >= lowestTimestamp) {
-                            curChunkIterator = curChunk.iterator();
-                            return;
-                        } else {
+                    if (curChunk.getEndTimestamp(curTimestamp, slices) > lowestTimestamp) {
+                        if (!curChunk.complete && curChunk.getMaxTimestamp(timestamper) < lowestTimestamp) {
+                            // Il chunk non e' completo e non contiene gia' dati che mi interessano, ma potrebbe:
+                            // lo completo, in modo da rilevarne l'effettivo slicing level
                             curChunk = getChunkAsc(key, curTimestamp, 0, true, param);
-                            if (curChunk.getEndTimestamp(curTimestamp, slices) >= lowestTimestamp) {
-                                curChunkIterator = curChunk.iterator();
-                                return;
-                            }
+                        }
+                        if (curChunk.getEndTimestamp(curTimestamp, slices) > lowestTimestamp) {
+                            curChunkIterator = curChunk.iteratorAt(timestamper, lowestTimestamp);
+                            return;
                         }
                     }
                 }
@@ -711,6 +711,15 @@ public class TimestampedCache<K, V, P> {
 
         CountingIterator<V> iterator() {
             return CountingIterator.create(data.iterator());
+        }
+
+        CountingIterator<V> iteratorAt(ToLongFunction<? super V> timestamper, long startTimestamp) {
+            int position = binarySearch(data, timestamper, startTimestamp);
+            if (position < 0) {
+                position = -position - 1;
+            }
+            ListIterator<V> base = data.listIterator(position);
+            return CountingIterator.create(base, position);
         }
 
         CountingIterator<V> reverseIterator() {
