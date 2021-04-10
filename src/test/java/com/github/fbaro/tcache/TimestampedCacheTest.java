@@ -15,6 +15,7 @@ import java.util.Random;
 import java.util.stream.Collectors;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertTrue;
 
 public class TimestampedCacheTest {
 
@@ -106,10 +107,10 @@ public class TimestampedCacheTest {
     public void verifyCustomBinarySearchDescendingWorks() {
         ImmutableList<Long> data0 = ImmutableList.of(10L, 8L, 6L, 4L, 2L);
         for (int i = 0; i < 5; i++) {
-            assertEquals(i, TimestampedCache.binarySearchDesc(data0, v -> v, 10L - 2 * i));
+            assertEquals(i, TimestampedCache.binarySearchDesc(data0, v -> v, 10L - 2L * i));
         }
         for (int i = -1; i >= -6; i--) {
-            assertEquals(i, TimestampedCache.binarySearchDesc(data0, v -> v, 13L + 2 * i));
+            assertEquals(i, TimestampedCache.binarySearchDesc(data0, v -> v, 13L + 2L * i));
         }
     }
 
@@ -261,6 +262,18 @@ public class TimestampedCacheTest {
         assertEquals(lc, loadCount);
         desc(cache, 1000, 1900);
         assertEquals(lc, loadCount);
+    }
+
+    @Test
+    public void verifyNoUnnecessaryLoadingOnIteratorCreation() {
+        long[] chunks = {4000, 2000, 500};
+        for (long l = 50; l < 100; l++) {
+            data.add(l * 100);
+        }
+        TimestampedCache<String, Long, Void> cache = new TimestampedCache<>(3, chunks, v -> v, loader);
+        cache.getAscending("", 3900, 3950, null).forEachRemaining(v -> {});
+        cache.getAscending("", 7900, 7950, null).forEachRemaining(v -> {});
+        assertTrue("Too many loads: " + loadCount, loadCount < 10);
     }
 
     @Test

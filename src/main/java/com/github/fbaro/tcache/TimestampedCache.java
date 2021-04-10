@@ -135,9 +135,17 @@ public class TimestampedCache<K, V, P> {
                 for (long slice : slices) {
                     curTimestamp = roundDown(lowestTimestamp, slice);
                     curChunk = getChunkAsc(key, curTimestamp, 0, false, param);
-                    if (curTimestamp + slices[curChunk.sliceLevel] >= lowestTimestamp) {
-                        curChunkIterator = curChunk.iterator();
-                        return;
+                    if (curChunk.getEndTimestamp(curTimestamp, slices) >= lowestTimestamp) {
+                        if (curChunk.complete || curChunk.getMaxTimestamp(timestamper) >= lowestTimestamp) {
+                            curChunkIterator = curChunk.iterator();
+                            return;
+                        } else {
+                            curChunk = getChunkAsc(key, curTimestamp, 0, true, param);
+                            if (curChunk.getEndTimestamp(curTimestamp, slices) >= lowestTimestamp) {
+                                curChunkIterator = curChunk.iterator();
+                                return;
+                            }
+                        }
                     }
                 }
                 throw new IllegalStateException("Should not be reachable");
@@ -695,6 +703,10 @@ public class TimestampedCache<K, V, P> {
 
         long getEndTimestamp(long startTimestamp, long[] slices) {
             return startTimestamp + slices[sliceLevel];
+        }
+
+        long getMaxTimestamp(ToLongFunction<? super V> timestamper) {
+            return timestamper.applyAsLong(data.get(data.size() - 1));
         }
 
         CountingIterator<V> iterator() {
