@@ -1,4 +1,4 @@
-![Maven Central](https://img.shields.io/maven-central/v/com.github.fbaro/tcache)
+[![Maven Central](https://img.shields.io/maven-central/v/com.github.fbaro/tcache)](https://search.maven.org/artifact/com.github.fbaro/tcache/1.0.1/jar)
 [![Build Status](https://travis-ci.com/fbaro/tcache.svg?branch=master)](https://travis-ci.com/fbaro/tcache)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
