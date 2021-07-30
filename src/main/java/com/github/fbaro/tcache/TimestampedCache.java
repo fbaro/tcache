@@ -137,7 +137,7 @@ public class TimestampedCache<K, V, P> {
                     curTimestamp = roundDown(lowestTimestamp, slice);
                     curChunk = getChunkAsc(key, curTimestamp, 0, false, param);
                     if (curChunk.getEndTimestamp(curTimestamp, slices) > lowestTimestamp) {
-                        if (!curChunk.complete && curChunk.getMaxTimestamp(timestamper) < lowestTimestamp) {
+                        if (!curChunk.complete && curChunk.getLastTimestamp(timestamper) < lowestTimestamp) {
                             // Il chunk non e' completo e non contiene gia' dati che mi interessano, ma potrebbe:
                             // lo completo, in modo da rilevarne l'effettivo slicing level
                             curChunk = getChunkAsc(key, curTimestamp, 0, true, param);
@@ -230,9 +230,16 @@ public class TimestampedCache<K, V, P> {
                 for (long slice : slices) {
                     curEndTimestamp = slice + roundDown(highestTimestamp, slice);
                     curDR = getChunkDesc(key, curEndTimestamp, -1, false, param);
-                    if (curEndTimestamp - slices[curDR.chunk.sliceLevel] <= highestTimestamp) {
-                        initChunk();
-                        return;
+                    if (curDR.getStartTimestamp(curEndTimestamp, slices) <= highestTimestamp) {
+                        if (!curDR.chunk.complete && curDR.getMinTimestamp(timestamper) > highestTimestamp) {
+                            // Il chunk non e' completo e non contiene gia' dati che mi interessano, ma potrebbe:
+                            // lo completo, in modo da rilevarne l'effettivo slicing level
+                            curDR = getChunkDesc(key, curEndTimestamp, curDR.chunkSeq, true, param);
+                        }
+                        if (curDR.getStartTimestamp(curEndTimestamp, slices) <= highestTimestamp) {
+                            initChunk();
+                            return;
+                        }
                     }
                 }
                 throw new IllegalStateException("Should not be reachable");
@@ -705,7 +712,11 @@ public class TimestampedCache<K, V, P> {
             return startTimestamp + slices[sliceLevel];
         }
 
-        long getMaxTimestamp(ToLongFunction<? super V> timestamper) {
+        long getFirstTimestamp(ToLongFunction<? super V> timestamper) {
+            return timestamper.applyAsLong(data.get(0));
+        }
+
+        long getLastTimestamp(ToLongFunction<? super V> timestamper) {
             return timestamper.applyAsLong(data.get(data.size() - 1));
         }
 
@@ -792,6 +803,18 @@ public class TimestampedCache<K, V, P> {
                 return chunk.iterator();
             } else {
                 return chunk.reverseIterator();
+            }
+        }
+
+        public long getStartTimestamp(long endTimestamp, long[] slices) {
+            return endTimestamp - slices[chunk.sliceLevel];
+        }
+
+        public long getMinTimestamp(ToLongFunction<? super V> timestamper) {
+            if (chunkSeq < 0) {
+                return chunk.getLastTimestamp(timestamper);
+            } else {
+                return chunk.getFirstTimestamp(timestamper);
             }
         }
     }

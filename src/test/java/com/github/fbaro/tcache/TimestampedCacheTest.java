@@ -265,7 +265,7 @@ public class TimestampedCacheTest {
     }
 
     @Test
-    public void verifyNoUnnecessaryLoadingOnIteratorCreation() {
+    public void verifyNoUnnecessaryLoadingOnAscendingIteratorCreation() {
         long[] chunks = {4000, 2000, 500};
         for (long l = 50; l < 100; l++) {
             data.add(l * 100);
@@ -273,6 +273,18 @@ public class TimestampedCacheTest {
         TimestampedCache<String, Long, Void> cache = new TimestampedCache<>(3, chunks, v -> v, loader);
         cache.getAscending("", 3900, 3950, null).forEachRemaining(v -> {});
         cache.getAscending("", 7900, 7950, null).forEachRemaining(v -> {});
+        assertTrue("Too many loads: " + loadCount, loadCount < 10);
+    }
+
+    @Test
+    public void verifyNoUnnecessaryLoadingOnDescendingIteratorCreation() {
+        long[] chunks = {4000, 2000, 500};
+        for (long l = 50; l < 100; l++) {
+            data.add(l * 100);
+        }
+        TimestampedCache<String, Long, Void> cache = new TimestampedCache<>(3, chunks, v -> v, loader);
+        cache.getDescending("", 4050, 4100, null).forEachRemaining(v -> {});
+        cache.getDescending("", 50, 100, null).forEachRemaining(v -> {});
         assertTrue("Too many loads: " + loadCount, loadCount < 10);
     }
 
